@@ -15,13 +15,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 use zbus::Message;
-use zbus::fdo::NameOwnerChanged;
-use zbus::fdo::PropertiesChanged;
-use zbus::fdo::{DBusProxy, PropertiesProxy};
+use zbus::fdo::{DBusProxy, NameOwnerChanged, PropertiesChanged, PropertiesProxy};
 use zbus::names::{BusName, InterfaceName};
 use zbus::zvariant::Value;
 
@@ -30,13 +27,13 @@ use crate::display::DisplayCmd;
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 /// Interval between `Position` property resamples (drift correction).
-const POSITION_RESYNC_SECS: u64 = 30;
+const POSITION_RESYNC: Duration = Duration::from_secs(30);
 /// Delay before reconnecting after the listener loop ends.
-const RECONNECT_SECS: u64 = 5;
+const RECONNECT: Duration = Duration::from_secs(5);
 
 const DEFAULT_TITLE: &str = "";
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum MprisError {
     #[error("D-Bus error: {0}")]
     Dbus(#[from] zbus::Error),
@@ -320,7 +317,7 @@ impl Player {
                 })
                 .await;
 
-            tokio::time::sleep(Duration::from_secs(RECONNECT_SECS)).await;
+            tokio::time::sleep(RECONNECT).await;
         }
     }
 
@@ -381,7 +378,7 @@ impl Player {
                 .await?;
         let mut seeked_stream = player.receive_signal("Seeked").await?;
 
-        let mut resync = tokio::time::interval(Duration::from_secs(POSITION_RESYNC_SECS));
+        let mut resync = tokio::time::interval(POSITION_RESYNC);
         resync.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         resync.tick().await; // first tick is immediate; consume it
 
