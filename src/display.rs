@@ -17,9 +17,9 @@ use tokio::time::sleep;
 use tracing::{debug, info};
 
 use crate::config::Config;
-use crate::driver::{DriverError, Hd44780, LineNb, WIDTH};
 use crate::mpris::{PlaybackState, PlayerData};
 use crate::scroll::ScrollState;
+use crate::{DriverError, Hd44780, LineNb, WIDTH};
 
 const PLAYING_TICK: Duration = Duration::from_millis(750);
 

@@ -1,10 +1,20 @@
 #[path = "../src/config.rs"]
 #[allow(unused)]
 mod config;
-#[path = "../src/driver.rs"]
-#[allow(unused)]
-mod driver;
-use driver::{Hd44780, LineNb};
+
+cfg_select! {
+    feature = "simu" => {
+        #[path = "../src/simu.rs"]
+        mod simu;
+        pub use simu::*;
+    }
+    _ => {
+        #[path = "../src/driver.rs"]
+        #[allow(unused)]
+        mod driver;
+        pub use driver::*;
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

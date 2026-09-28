@@ -5,7 +5,18 @@ use tracing::info;
 
 mod config;
 mod display;
-mod driver;
+
+cfg_select! {
+    feature = "simu" => {
+        mod simu;
+        pub use simu::*;
+    }
+    _ => {
+        mod driver;
+        pub use driver::*;
+    }
+}
+
 mod mpris;
 mod scroll;
 

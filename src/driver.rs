@@ -2,36 +2,17 @@
 
 use rpi_pal::gpio::{Gpio, Level, OutputPin};
 use std::time::Duration;
-use thiserror::Error;
 use tokio::time::sleep;
 
 use crate::config::DisplayConfig;
 
 /// Number of display cells per row.
 pub const WIDTH: usize = 16;
-/// RAM address of line 1.
-const LINE1_ADDR: u8 = 0;
-/// RAM address of line 2.
-const LINE2_ADDR: u8 = 64;
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum DriverError {
     #[error("failed to open GPIO: {0}")]
     Gpio(#[from] rpi_pal::gpio::Error),
-}
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum LineNb {
-    One,
-    Two,
-}
-
-impl LineNb {
-    fn get_addr(self) -> u8 {
-        match self {
-            LineNb::One => LINE1_ADDR,
-            LineNb::Two => LINE2_ADDR,
-        }
-    }
 }
 
 /// HD44780 commands.
@@ -51,6 +32,21 @@ mod args {
     pub(super) const FUNCTION_SET_5X8_FONT: u8 = 0x00; // F
     // https://www.winstar.com.tw/built-in-font-library-ws0010.html
     pub(super) const FUNCTION_SET_FONT_BANK_EU1: u8 = 0x01;
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum LineNb {
+    One,
+    Two,
+}
+
+impl LineNb {
+    fn get_addr(self) -> u8 {
+        match self {
+            LineNb::One => 0,
+            LineNb::Two => 64,
+        }
+    }
 }
 
 /// HD44780 driver for 4-bit parallel mode.
@@ -114,7 +110,7 @@ impl Hd44780 {
     }
 
     /// Set the cursor position (0-15 for first row, 64-79 for second row).
-    pub async fn set_cursor(&mut self, pos: u8) {
+    async fn set_cursor(&mut self, pos: u8) {
         self.command(cmd::SET_DDRAM_ADDR | pos).await;
     }
 
@@ -128,7 +124,7 @@ impl Hd44780 {
     }
 
     /// Clear the display.
-    pub async fn clear(&mut self) {
+    async fn clear(&mut self) {
         self.command(cmd::CLEAR).await;
         self.last_len_line1 = 0;
         self.last_len_line2 = 0;
@@ -139,12 +135,9 @@ impl Hd44780 {
     /// Write to a specific line.
     pub async fn write_line(&mut self, line: LineNb, data: impl Iterator<Item = char>) {
         self.set_cursor(line.get_addr()).await;
+
         self.rs.set_high();
 
-        let last_len = match line {
-            LineNb::One => self.last_len_line1,
-            LineNb::Two => self.last_len_line2,
-        };
         let mut cur_len = 0u8;
         for byte in data.map(map_char).take(WIDTH) {
             self.send_nibble((byte >> 4) & 0x0F).await;
@@ -155,6 +148,10 @@ impl Hd44780 {
         }
 
         // overide remaining characters from previous line, if any
+        let last_len = match line {
+            LineNb::One => self.last_len_line1,
+            LineNb::Two => self.last_len_line2,
+        };
         if let Some(delta) = last_len.checked_sub(cur_len)
             && delta > 0
         {
