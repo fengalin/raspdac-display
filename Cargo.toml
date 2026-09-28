@@ -1,0 +1,28 @@
+[package]
+name = "raspdac-display"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "raspdac-display"
+path = "src/main.rs"
+
+[[bin]]
+name = "check_oled"
+path = "bin/check_oled.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["sync", "macros", "rt", "signal", "time"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+rpi-pal = "0.22"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release-slim]
+inherits = "release"
+strip = "symbols"
+lto = "fat"
+panic = "abort"
+codegen-units = 1
