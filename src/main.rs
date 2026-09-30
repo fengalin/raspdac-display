@@ -1,10 +1,11 @@
 //! RaspDAC Display Service: monitors MPRIS players and drives a Winstar 2x16 HD44780-compatible OLED.
 
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 mod config;
 mod display;
+use display::Display;
 
 cfg_select! {
     feature = "simu" => {
@@ -18,10 +19,14 @@ cfg_select! {
 }
 
 mod mpris;
-mod scroll;
-
-use display::{Display, DisplayCmd};
 use mpris::{Player, PlayerAggregator};
+
+mod charge_point_notif;
+
+mod charge_point;
+use charge_point::ChargePointListener;
+
+mod scroll;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,35 +38,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = config::Config::default();
 
-    let (display_cmd_tx, display_cmd_rx) = mpsc::channel(8);
+    let (stop_tx, stop_rx) = broadcast::channel(8);
 
-    let display = Display::new(&config).await?;
-    let display_handle = tokio::spawn(display.into_task(display_cmd_rx));
+    let (display_cmd_tx, display_cmd_rx) = mpsc::channel(8);
+    let display = Display::new(&config, display_cmd_rx).await?;
 
     let (player_update_tx, player_update_rx) = mpsc::channel(8);
-
     let agg = PlayerAggregator::new(player_update_rx, display_cmd_tx.clone());
-    let pibuz = Player::new(config.mpris.pibuz_bus)?;
-    let mpd = Player::new(config.mpris.mpd_bus)?;
+    let pibuz = Player::new(config.mpris.pibuz_bus, player_update_tx.clone())?;
+    let mpd = Player::new(config.mpris.mpd_bus, player_update_tx)?;
 
-    let mpris_handles = vec![
-        tokio::spawn(agg.into_task()),
-        tokio::spawn(pibuz.into_task(player_update_tx.clone())),
-        tokio::spawn(mpd.into_task(player_update_tx)),
+    let mut task_handles = vec![
+        tokio::spawn(display.into_task(stop_rx)),
+        tokio::spawn(agg.into_task(stop_tx.subscribe())),
+        tokio::spawn(pibuz.into_task(stop_tx.subscribe())),
+        tokio::spawn(mpd.into_task(stop_tx.subscribe())),
     ];
+
+    let charge_point_listener = ChargePointListener::new(display_cmd_tx);
+    task_handles.push(tokio::spawn(
+        charge_point_listener.into_task(stop_tx.subscribe()),
+    ));
 
     info!("RaspDAC Display Service started");
     tokio::signal::ctrl_c().await?;
 
     info!("Shutting down...");
 
-    let _ = display_cmd_tx.send(DisplayCmd::Stop).await;
+    let _ = stop_tx.send(());
 
-    for handle in mpris_handles {
-        handle.abort();
+    for handle in task_handles {
+        let _ = handle.await;
     }
-
-    let _ = display_handle.await;
 
     info!("Shut down complete.");
     Ok(())

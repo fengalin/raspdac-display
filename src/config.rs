@@ -44,8 +44,16 @@ pub struct MprisConfig {
 
 impl Default for MprisConfig {
     fn default() -> Self {
+        let mpd_bus = cfg_select! {
+            feature = "simu" => {
+                "org.mpris.MediaPlayer2.clementine"
+            }
+            _ => {
+                "org.mpris.MediaPlayer2.mpd"
+            }
+        };
         MprisConfig {
-            mpd_bus: "org.mpris.MediaPlayer2.mpd",
+            mpd_bus,
             pibuz_bus: "org.mpris.MediaPlayer2.pibuz",
         }
     }
@@ -78,8 +86,16 @@ pub struct IdleConfig {
 
 impl Default for IdleConfig {
     fn default() -> Self {
+        let timeout = cfg_select! {
+            feature = "simu" => {
+                5
+            }
+            _ => {
+                300
+            }
+        };
         IdleConfig {
-            timeout: Duration::from_secs(300),
+            timeout: Duration::from_secs(timeout),
         }
     }
 }

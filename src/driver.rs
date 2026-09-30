@@ -114,22 +114,26 @@ impl Hd44780 {
         self.command(cmd::SET_DDRAM_ADDR | pos).await;
     }
 
-    pub async fn clear_on(&mut self) {
-        self.clear().await;
-        self.command(cmd::DISPLAY_ON).await;
-    }
-
-    pub async fn off(&mut self) {
-        self.command(cmd::DISPLAY_OFF).await;
-    }
-
     /// Clear the display.
-    async fn clear(&mut self) {
+    pub async fn clear(&mut self) {
         self.command(cmd::CLEAR).await;
         self.last_len_line1 = 0;
         self.last_len_line2 = 0;
         // winstar OLEDs require 6.2ms for this command, according to spec
         sleep(Duration::from_micros(6_200)).await;
+    }
+
+    pub async fn clear_on(&mut self) {
+        self.clear().await;
+        self.on().await;
+    }
+
+    pub async fn on(&mut self) {
+        self.command(cmd::DISPLAY_ON).await;
+    }
+
+    pub async fn off(&mut self) {
+        self.command(cmd::DISPLAY_OFF).await;
     }
 
     /// Write to a specific line.
