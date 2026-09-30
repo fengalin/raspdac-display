@@ -252,6 +252,7 @@ impl Player {
 
     async fn on_props_changed_message<'a>(
         &mut self,
+        props: &'a PropertiesProxy<'a>,
         player_iface: &'a InterfaceName<'a>,
         props_changed: PropertiesChanged,
     ) -> Result<(), MprisError> {
@@ -261,6 +262,8 @@ impl Player {
             return Ok(());
         }
         if self.apply_props(args.changed_properties().iter().map(|(k, v)| (*k, v))) {
+            self.sample_position(props, player_iface).await?;
+
             self.player_notif_tx
                 .send(PlayerNotification::Update {
                     bus_name: self.bus_name.clone(),
@@ -409,6 +412,7 @@ impl Player {
                 tokio::select! {
                     Some(props_changed) = props_changed_stream.next() => {
                         self.on_props_changed_message(
+                            &props,
                             &player_iface,
                             props_changed,
                         ).await?;
@@ -421,6 +425,13 @@ impl Player {
                     }
                     _ = resync.tick() => {
                         self.sample_position(&props, &player_iface).await?;
+                        self.player_notif_tx
+                            .send(PlayerNotification::BasePosition {
+                                bus_name: self.bus_name.clone(),
+                                position_us: self.data.base_position_us,
+                                instant: self.data.base_position_instant,
+                            })
+                            .await?;
                     },
                     else => {
                         info!(player = %self.bus_name, "dbus streams terminated");
@@ -432,6 +443,7 @@ impl Player {
                 tokio::select! {
                     Some(props_changed) = props_changed_stream.next() => {
                         self.on_props_changed_message(
+                            &props,
                             &player_iface,
                             props_changed,
                         ).await?;
@@ -479,14 +491,6 @@ impl Player {
             })
             .unwrap_or_default();
         self.data.base_position_instant = now;
-
-        self.player_notif_tx
-            .send(PlayerNotification::BasePosition {
-                bus_name: self.bus_name.clone(),
-                position_us: self.data.base_position_us,
-                instant: self.data.base_position_instant,
-            })
-            .await?;
 
         Ok(())
     }
