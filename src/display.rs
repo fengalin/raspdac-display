@@ -344,10 +344,7 @@ impl Display {
                     .write_line(LineNb::One, "⛶  charge point".chars())
                     .await;
                 self.oled
-                    .write_line(
-                        LineNb::Two,
-                        "  ".chars().chain(self.charge_state.name().chars()),
-                    )
+                    .write_line(LineNb::Two, self.charge_state.name().chars())
                     .await;
             }
         }
