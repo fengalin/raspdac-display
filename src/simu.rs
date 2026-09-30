@@ -24,8 +24,16 @@ impl Hd44780 {
         })
     }
 
+    pub async fn clear(&mut self) {
+        info!("clear");
+    }
+
     pub async fn clear_on(&mut self) {
         info!("clear on");
+    }
+
+    pub async fn on(&mut self) {
+        info!("on");
     }
 
     pub async fn off(&mut self) {

@@ -11,11 +11,12 @@
 //! An aggregator task keeps per-player state, picks the active player,
 //! and sends the resulting `DisplayState` to the display thread.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
-use tokio::sync::mpsc;
+use futures_lite::stream::StreamExt;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, trace, warn};
 use zbus::Message;
 use zbus::fdo::{DBusProxy, NameOwnerChanged, PropertiesChanged, PropertiesProxy};
@@ -51,6 +52,15 @@ pub enum PlaybackState {
     Playing,
     Paused,
     Stopped,
+}
+
+impl PlaybackState {
+    pub fn is_playing(self) -> bool {
+        matches!(self, PlaybackState::Playing)
+    }
+    pub fn is_paused(self) -> bool {
+        matches!(self, PlaybackState::Paused)
+    }
 }
 
 impl<'a> From<&'a Value<'a>> for PlaybackState {
@@ -115,17 +125,22 @@ pub enum PlayerNotification {
 }
 
 /// Per-player state update sent to the aggregator.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Player {
     bus_name: Arc<BusName<'static>>,
+    player_notif_tx: mpsc::Sender<PlayerNotification>,
     state: PlaybackState,
     data: PlayerData,
 }
 
 impl Player {
-    pub fn new(bus_name: &'static str) -> Result<Self, MprisError> {
+    pub fn new(
+        bus_name: &'static str,
+        player_notif_tx: mpsc::Sender<PlayerNotification>,
+    ) -> Result<Self, MprisError> {
         Ok(Player {
             bus_name: BusName::try_from(bus_name)?.into(),
+            player_notif_tx,
             state: PlaybackState::Stopped,
             data: Default::default(),
         })
@@ -151,9 +166,6 @@ impl Player {
                             self.data.base_position_instant = Instant::now();
                         }
                         must_notify = true;
-                    } else {
-                        // FIXME check whether this is still needed
-                        must_notify = self.state == PlaybackState::Playing;
                     }
                 }
                 "Metadata" => {
@@ -200,7 +212,11 @@ impl Player {
                         must_notify = true;
                     }
                 }
-                "TrackId" => must_notify = true,
+                "TrackId" => {
+                    debug!(player = %self.bus_name, new = ?val, "new track id");
+                    // FIXME
+                    // must_notify = true
+                }
                 "Position" => {
                     // note: position is only set on initial props.get_all()
                     match i64::try_from(val) {
@@ -237,7 +253,6 @@ impl Player {
     async fn on_props_changed_message<'a>(
         &mut self,
         player_iface: &'a InterfaceName<'a>,
-        player_notif_tx: &mpsc::Sender<PlayerNotification>,
         props_changed: PropertiesChanged,
     ) -> Result<(), MprisError> {
         let args = props_changed.args()?;
@@ -246,7 +261,7 @@ impl Player {
             return Ok(());
         }
         if self.apply_props(args.changed_properties().iter().map(|(k, v)| (*k, v))) {
-            player_notif_tx
+            self.player_notif_tx
                 .send(PlayerNotification::Update {
                     bus_name: self.bus_name.clone(),
                     state: self.state,
@@ -270,11 +285,7 @@ impl Player {
         Ok(())
     }
 
-    async fn on_seeked_message(
-        &mut self,
-        player_notif_tx: &mpsc::Sender<PlayerNotification>,
-        seeked: Message,
-    ) -> Result<(), MprisError> {
+    async fn on_seeked_message(&mut self, seeked: Message) -> Result<(), MprisError> {
         if let Ok((pos,)) = seeked
             .body()
             .deserialize::<(u64,)>()
@@ -283,7 +294,7 @@ impl Player {
             debug!(player = %self.bus_name, %pos, "seeked message");
             self.data.base_position_us = pos;
             self.data.base_position_instant = Instant::now();
-            player_notif_tx
+            self.player_notif_tx
                 .send(PlayerNotification::BasePosition {
                     bus_name: self.bus_name.clone(),
                     position_us: self.data.base_position_us,
@@ -301,21 +312,35 @@ impl Player {
     }
 
     /// Run the listener loop for one player, reconnecting when it ends.
-    pub async fn into_task(mut self, display_cmd_tx: mpsc::Sender<PlayerNotification>) {
+    pub async fn into_task(mut self, mut stop_rx: broadcast::Receiver<()>) {
         loop {
-            match self.listen(&display_cmd_tx).await {
+            tokio::select! {
+                biased;
+                _  = stop_rx.recv() => {
+                    info!(player = %self.bus_name, "shutting down due to stop request");
+                    break;
+                }
+                _ = self.connect() => (),
+            }
+        }
+    }
+
+    async fn connect(&mut self) -> Result<(), MprisError> {
+        loop {
+            match self.listen().await {
                 Ok(()) => info!(player = %self.bus_name, "left the bus"),
-                Err(err) => warn!(player = %self.bus_name, %err, "listener error"),
+                Err(err) => warn!(player = %self.bus_name, %err, "listener"),
             }
 
             self.clear();
-            let _ = display_cmd_tx
+            self.player_notif_tx
                 .send(PlayerNotification::Update {
                     bus_name: self.bus_name.clone(),
                     state: self.state,
                     data: self.data.clone(),
                 })
-                .await;
+                .await
+                .inspect_err(|err| error!(%err, "Player notif channel closed"))?;
 
             tokio::time::sleep(RECONNECT).await;
         }
@@ -325,10 +350,7 @@ impl Player {
     /// `NameOwnerChanged`, and periodic `Position` resamples.
     ///
     /// Returns when the player leaves the bus, or on a fatal D-Bus error.
-    async fn listen(
-        &mut self,
-        player_notif_tx: &mpsc::Sender<PlayerNotification>,
-    ) -> Result<(), MprisError> {
+    async fn listen(&mut self) -> Result<(), MprisError> {
         let conn = zbus::Connection::session().await?;
         let player_iface = InterfaceName::try_from(PLAYER_IFACE)?;
         let dbus = DBusProxy::new(&conn).await?;
@@ -360,7 +382,7 @@ impl Player {
                 .map(|(k, v)| (k.as_str(), v.downcast_ref().unwrap())),
         );
 
-        player_notif_tx
+        self.player_notif_tx
             .send(PlayerNotification::Update {
                 bus_name: self.bus_name.clone(),
                 state: self.state,
@@ -388,7 +410,6 @@ impl Player {
                     Some(props_changed) = props_changed_stream.next() => {
                         self.on_props_changed_message(
                             &player_iface,
-                            player_notif_tx,
                             props_changed,
                         ).await?;
                     }
@@ -396,10 +417,10 @@ impl Player {
                         self.on_name_owner_changed_message(name_owner_changed)?;
                     }
                     Some(seeked) = seeked_stream.next() => {
-                        self.on_seeked_message(player_notif_tx, seeked).await?;
+                        self.on_seeked_message(seeked).await?;
                     }
                     _ = resync.tick() => {
-                        self.sample_position(&props, &player_iface, player_notif_tx).await?;
+                        self.sample_position(&props, &player_iface).await?;
                     },
                     else => {
                         info!(player = %self.bus_name, "dbus streams terminated");
@@ -412,7 +433,6 @@ impl Player {
                     Some(props_changed) = props_changed_stream.next() => {
                         self.on_props_changed_message(
                             &player_iface,
-                            player_notif_tx,
                             props_changed,
                         ).await?;
                     }
@@ -420,7 +440,7 @@ impl Player {
                         self.on_name_owner_changed_message(name_owner_changed)?;
                     }
                     Some(seeked) = seeked_stream.next() => {
-                        self.on_seeked_message(player_notif_tx, seeked).await?;
+                        self.on_seeked_message(seeked).await?;
                     }
                     else => {
                         info!(player = %self.bus_name, "dbus streams terminated");
@@ -437,7 +457,6 @@ impl Player {
         &mut self,
         props: &'a PropertiesProxy<'a>,
         player_iface: &'a InterfaceName<'a>,
-        player_notif_tx: &mpsc::Sender<PlayerNotification>,
     ) -> Result<(), MprisError> {
         let now = Instant::now();
         let Ok(val) = props.get(player_iface.clone(), "Position").await else {
@@ -461,7 +480,7 @@ impl Player {
             .unwrap_or_default();
         self.data.base_position_instant = now;
 
-        player_notif_tx
+        self.player_notif_tx
             .send(PlayerNotification::BasePosition {
                 bus_name: self.bus_name.clone(),
                 position_us: self.data.base_position_us,
@@ -498,73 +517,99 @@ impl PlayerAggregator {
         }
     }
 
-    pub async fn into_task(mut self) {
-        while let Some(notif) = self.player_notif_rx.recv().await {
-            match notif {
-                PlayerNotification::Update {
-                    bus_name,
-                    state,
-                    data,
-                } => {
-                    trace!(player = %bus_name, ?state, ?data, "update notif");
+    pub async fn into_task(mut self, mut stop_rx: broadcast::Receiver<()>) {
+        tokio::select! {
+            biased;
+            _  = stop_rx.recv() => {
+                info!("shutting down due to stop request (aggregator)");
+            }
+            _ = self.listen() => (),
+        }
+    }
 
-                    let active_player = self.last_active.get_or_insert_with(|| ActivePlayer {
-                        bus_name: bus_name.clone(),
-                        state,
-                    });
-
-                    if active_player.bus_name != bus_name {
-                        use PlaybackState::*;
-                        match (active_player.state, state) {
-                            (Playing, _) => continue,
-                            (_, Playing) => (),
-                            (Stopped, Paused) => (),
-                            _ => continue,
-                        }
-
-                        self.last_active = Some(ActivePlayer { bus_name, state });
-                    }
-
-                    if self
-                        .display_cmd_tx
-                        .send(DisplayCmd::Update { state, data })
-                        .await
-                        .is_err()
-                    {
-                        error!("Display channel closed");
+    async fn listen(&mut self) {
+        loop {
+            match self.player_notif_rx.recv().await {
+                Some(notif) => {
+                    if self.handle(notif).await.is_break() {
                         break;
                     }
                 }
-                PlayerNotification::BasePosition {
-                    bus_name,
-                    position_us,
-                    instant,
-                } => {
-                    trace!(player = %bus_name, %position_us, ?instant, "position notif");
-
-                    let Some(ref active_player) = self.last_active else {
-                        info!(player = %bus_name, "aggregator got position notif but no active player");
-                        continue;
-                    };
-
-                    if active_player.bus_name != bus_name {
-                        continue;
-                    }
-
-                    if self
-                        .display_cmd_tx
-                        .send(DisplayCmd::BasePosition {
-                            position_us,
-                            instant,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        error!("Display channel closed");
-                        break;
-                    }
+                None => {
+                    warn!("player notif chan terminated");
+                    break;
                 }
             }
         }
+    }
+
+    async fn handle(&mut self, notif: PlayerNotification) -> ControlFlow<()> {
+        match notif {
+            PlayerNotification::Update {
+                bus_name,
+                state,
+                data,
+            } => {
+                trace!(player = %bus_name, ?state, ?data, "update notif");
+
+                let active_player = self.last_active.get_or_insert_with(|| ActivePlayer {
+                    bus_name: bus_name.clone(),
+                    state,
+                });
+
+                if active_player.bus_name != bus_name {
+                    use PlaybackState::*;
+                    match (active_player.state, state) {
+                        (Playing, _) => return ControlFlow::Continue(()),
+                        (_, Playing) => (),
+                        (Stopped, Paused) => (),
+                        _ => return ControlFlow::Continue(()),
+                    }
+
+                    self.last_active = Some(ActivePlayer { bus_name, state });
+                }
+
+                if self
+                    .display_cmd_tx
+                    .send(DisplayCmd::PlayerUpdate { state, data })
+                    .await
+                    .is_err()
+                {
+                    error!("Display channel closed");
+                    return ControlFlow::Break(());
+                }
+            }
+            PlayerNotification::BasePosition {
+                bus_name,
+                position_us,
+                instant,
+            } => {
+                trace!(player = %bus_name, %position_us, ?instant, "position notif");
+
+                let Some(ref active_player) = self.last_active else {
+                    info!(player = %bus_name, "aggregator got position notif but no active player");
+                    return ControlFlow::Continue(());
+                };
+
+                if active_player.bus_name != bus_name {
+                    return ControlFlow::Continue(());
+                }
+
+                if self
+                    .display_cmd_tx
+                    .send(DisplayCmd::PlayerBasePosition {
+                        position_us,
+                        instant,
+                    })
+                    .await
+                    .is_err()
+                {
+                    error!("Display channel closed");
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+
+        ControlFlow::Continue(())
     }
 }
