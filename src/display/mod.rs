@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::sleep;
 use tracing::{debug, info};
 
-use crate::charge_point_notif::ChargeState;
+use crate::charge_point::ChargeState;
 use crate::config::Config;
 use crate::{PlaybackState, PlayerData, PlayerNotification};
 

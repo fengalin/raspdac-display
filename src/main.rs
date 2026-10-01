@@ -8,7 +8,6 @@ mod display;
 use display::Display;
 
 mod charge_point;
-mod charge_point_notif;
 use charge_point::ChargePointListener;
 
 mod player;

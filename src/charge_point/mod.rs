@@ -7,8 +7,10 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::charge_point_notif::{ChargeState, UNIX_SOCKET_PATH};
+mod notification;
 use crate::display::DisplayCmd;
+pub use notification::ChargeState;
+use notification::UNIX_SOCKET_PATH;
 
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
