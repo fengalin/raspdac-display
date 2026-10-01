@@ -1,13 +1,10 @@
-//! Display thread: owns the HD44780 driver, runs the animation loop,
-//! processes commands from the mpsc channel, and manages the idle timer.
+//! Display task handling
 //!
-//! Layout for player modes:
+//! Display can be in one of three states:
 //!
-//! - Line 1: state symbol (> playing, || paused) + position / duration.
-//! - Line 2: track title, ping-pong scrolling when it exceeds 16 cells.
-//! - No active player: line 1 shows the clock (`HH:MM`), line 2 blank.
-//! - Idle timer: after the configured timeout in the paused state the
-//!   display is blanked until the next activity.
+//! * Off: display is blank
+//! * Player: displaying current song
+//! * Charge Point: displaying charge point status
 
 use std::fmt::Write;
 use std::time::{Duration, Instant};
@@ -18,10 +15,21 @@ use tracing::{debug, info};
 
 use crate::charge_point_notif::ChargeState;
 use crate::config::Config;
-use crate::scroll::ScrollState;
-use crate::{
-    DISPLAY_WIDTH, DriverError, Hd44780, LineNb, PlaybackState, PlayerData, PlayerNotification,
-};
+use crate::{PlaybackState, PlayerData, PlayerNotification};
+
+cfg_select! {
+    feature = "simu" => {
+        mod simu;
+        pub use simu::*;
+    }
+    _ => {
+        mod driver;
+        pub use driver::*;
+    }
+}
+
+mod scroll;
+use scroll::ScrollState;
 
 const PLAYING_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const CHARGING_REFRESH_INTERVAL: Duration = Duration::from_secs(1);

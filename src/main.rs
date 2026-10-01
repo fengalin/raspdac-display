@@ -7,25 +7,12 @@ mod config;
 mod display;
 use display::Display;
 
-cfg_select! {
-    feature = "simu" => {
-        mod simu;
-        pub use simu::*;
-    }
-    _ => {
-        mod driver;
-        pub use driver::*;
-    }
-}
-
 mod charge_point;
 mod charge_point_notif;
 use charge_point::ChargePointListener;
 
 mod player;
 use player::*;
-
-mod scroll;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

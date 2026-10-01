@@ -4,12 +4,12 @@ mod config;
 
 cfg_select! {
     feature = "simu" => {
-        #[path = "../src/simu.rs"]
+        #[path = "../src/display/simu.rs"]
         mod simu;
         pub use simu::*;
     }
     _ => {
-        #[path = "../src/driver.rs"]
+        #[path = "../src/display/driver.rs"]
         #[allow(unused)]
         mod driver;
         pub use driver::*;
