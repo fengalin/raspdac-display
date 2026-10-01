@@ -9,6 +9,7 @@ After=dbus.service
 
 [Service]
 ExecStart=/usr/local/bin/raspdac-display
+KillSignal=SIGINT
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info
