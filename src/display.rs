@@ -23,7 +23,7 @@ use crate::{
     DISPLAY_WIDTH, DriverError, Hd44780, LineNb, PlaybackState, PlayerData, PlayerNotification,
 };
 
-const PLAYING_TICK: Duration = Duration::from_millis(750);
+const PLAYING_TICK: Duration = Duration::from_secs(1);
 
 /// Display Commands.
 #[derive(Debug)]
@@ -380,7 +380,6 @@ impl Display {
 
     async fn run(&mut self) {
         loop {
-            // FIXME use a timer that repeats otherwise we get a lot of jitter
             if let Some(tick_period) = self.tick_period {
                 tokio::select! {
                     biased;
@@ -393,7 +392,7 @@ impl Display {
                         }
                     },
 
-                    _ = sleep(tick_period) => self.on_tick().await,
+                    _ = sleep(Instant::now() + tick_period - self.last_tick) => self.on_tick().await,
                 }
             } else {
                 // no periodic refresh / timeout

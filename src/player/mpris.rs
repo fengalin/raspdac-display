@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use futures_lite::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc};
+use tokio::time;
 use tracing::{debug, error, info, warn};
 use zbus::Message;
 use zbus::fdo::{DBusProxy, NameOwnerChanged, PropertiesChanged, PropertiesProxy};
@@ -21,11 +22,9 @@ use crate::{NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotificati
 
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
-/// Interval between `Position` property resamples (drift correction).
-const POSITION_RESYNC: Duration = Duration::from_secs(30);
 
-/// Delay before reconnecting after the listener loop ends.
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const RESAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MprisError {
@@ -343,10 +342,6 @@ impl MprisPlayer {
             zbus::proxy::Proxy::new(&conn, bus_name.as_ref(), OBJECT_PATH, PLAYER_IFACE).await?;
         let mut seeked_stream = player.receive_signal("Seeked").await?;
 
-        let mut resync = tokio::time::interval(POSITION_RESYNC);
-        resync.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        resync.tick().await; // first tick is immediate; consume it
-
         loop {
             if self.state == PlaybackState::Playing {
                 tokio::select! {
@@ -363,7 +358,7 @@ impl MprisPlayer {
                     Some(seeked) = seeked_stream.next() => {
                         self.on_seeked_message(seeked).await?;
                     }
-                    _ = resync.tick() => {
+                    _ = time::sleep(Instant::now() + RESAMPLE_INTERVAL - self.data.base_position_instant) => {
                         self.sample_position(&props, &player_iface).await?;
                         self.player_notif_tx
                             .send(NamedPlayerNotification {
