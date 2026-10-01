@@ -1,4 +1,4 @@
-pub const UNIX_SOCKET_PATH: &str = "/var/run/charge_point/socket";
+pub const UNIX_SOCKET_PATH: &str = "/run/charge_point/socket";
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChargeProgress {
