@@ -18,11 +18,12 @@ use super::{
 const PLAYER_NAME: &str = "mpd";
 
 cfg_select! {
-    feature = "simu" => {
-        const SOCKET_PATH: &str = "/run/user/1000/mpd/socket";
+    all(target_arch = "aarch64", target_os = "linux") => {
+        // expecting we target the raspberry pi
+        const SOCKET_PATH: &str = "/var/run/mpd/socket";
     }
     _ => {
-        const SOCKET_PATH: &str = "/var/run/mpd/socket";
+        const SOCKET_PATH: &str = "/run/user/1000/mpd/socket";
     }
 }
 

@@ -27,10 +27,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
-[features]
-default = []
-simu = []
-
 [profile.release-slim]
 inherits = "release"
 strip = "symbols"

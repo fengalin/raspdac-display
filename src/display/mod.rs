@@ -18,13 +18,14 @@ use crate::config::Config;
 use crate::{PlaybackState, PlayerData, PlayerNotification};
 
 cfg_select! {
-    feature = "simu" => {
-        mod simu;
-        pub use simu::*;
-    }
-    _ => {
+    all(target_arch = "aarch64", target_os = "linux") => {
+        // expecting we target the raspberry pi
         mod driver;
         pub use driver::*;
+    }
+    _ => {
+        mod simu;
+        pub use simu::*;
     }
 }
 

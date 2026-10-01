@@ -62,11 +62,12 @@ pub struct IdleConfig {
 impl Default for IdleConfig {
     fn default() -> Self {
         let timeout = cfg_select! {
-            feature = "simu" => {
-                5
+            all(target_arch = "aarch64", target_os = "linux") => {
+                // expecting we target the raspberry pi
+                300
             }
             _ => {
-                300
+                5
             }
         };
         IdleConfig {
