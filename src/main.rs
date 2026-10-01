@@ -18,9 +18,6 @@ cfg_select! {
     }
 }
 
-mod mpris;
-use mpris::{MprisPlayer, PlayerAggregator};
-
 mod charge_point;
 mod charge_point_notif;
 use charge_point::ChargePointListener;

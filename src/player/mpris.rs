@@ -7,24 +7,17 @@
 //! - The `Seeked` signal triggers an immediate position resync.
 //! - The `Position` property is resampled periodically, because the MPRIS
 //!   specification does not emit `PropertiesChanged` for it.
-//!
-//! An aggregator task keeps per-player state, picks the active player,
-//! and sends the resulting `DisplayState` to the display thread.
-
-use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
 use futures_lite::stream::StreamExt;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use zbus::Message;
 use zbus::fdo::{DBusProxy, NameOwnerChanged, PropertiesChanged, PropertiesProxy};
 use zbus::names::{InterfaceName, OwnedBusName};
 use zbus::zvariant::Value;
 
-use crate::{
-    NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotification, display::DisplayCmd,
-};
+use crate::{NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotification};
 
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
@@ -442,125 +435,5 @@ impl MprisPlayer {
         self.data.base_position_instant = now;
 
         Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct ActivePlayer {
-    name: &'static str,
-    state: PlaybackState,
-}
-
-#[derive(Debug)]
-pub struct PlayerAggregator {
-    last_active: Option<ActivePlayer>,
-    player_notif_rx: mpsc::Receiver<NamedPlayerNotification>,
-    display_cmd_tx: mpsc::Sender<DisplayCmd>,
-}
-
-impl PlayerAggregator {
-    pub fn new(
-        player_notif_rx: mpsc::Receiver<NamedPlayerNotification>,
-        display_cmd_tx: mpsc::Sender<DisplayCmd>,
-    ) -> Self {
-        PlayerAggregator {
-            last_active: None,
-            player_notif_rx,
-            display_cmd_tx,
-        }
-    }
-
-    pub async fn into_task(mut self, mut stop_rx: broadcast::Receiver<()>) {
-        tokio::select! {
-            biased;
-            _  = stop_rx.recv() => {
-                info!("shutting down due to stop request (aggregator)");
-            }
-            _ = self.listen() => (),
-        }
-    }
-
-    async fn listen(&mut self) {
-        loop {
-            match self.player_notif_rx.recv().await {
-                Some(notif) => {
-                    if self.handle(notif).await.is_break() {
-                        break;
-                    }
-                }
-                None => {
-                    warn!("player notif chan terminated");
-                    break;
-                }
-            }
-        }
-    }
-
-    async fn handle(&mut self, notif: NamedPlayerNotification) -> ControlFlow<()> {
-        match notif {
-            NamedPlayerNotification {
-                player_name,
-                notif: PlayerNotification::Update { state, data },
-            } => {
-                trace!(player = %player_name, ?state, ?data, "update");
-
-                let active_player = self.last_active.get_or_insert(ActivePlayer {
-                    name: player_name,
-                    state,
-                });
-
-                if active_player.name != player_name {
-                    use PlaybackState::*;
-                    match (active_player.state, state) {
-                        (Playing, _) => return ControlFlow::Continue(()),
-                        (_, Playing) => (),
-                        (Stopped, Paused) => (),
-                        _ => return ControlFlow::Continue(()),
-                    }
-
-                    self.last_active = Some(ActivePlayer {
-                        name: player_name,
-                        state,
-                    });
-                }
-
-                if self
-                    .display_cmd_tx
-                    .send(DisplayCmd::Player(PlayerNotification::Update {
-                        state,
-                        data,
-                    }))
-                    .await
-                    .is_err()
-                {
-                    error!("Display channel closed");
-                    return ControlFlow::Break(());
-                }
-            }
-            NamedPlayerNotification { player_name, notif } => {
-                trace!(player = %player_name, ?notif);
-
-                let Some(ref active_player) = self.last_active else {
-                    info!(player = %player_name, "aggregator got position notif but no active player");
-                    return ControlFlow::Continue(());
-                };
-
-                if active_player.name != player_name {
-                    return ControlFlow::Continue(());
-                }
-
-                if self
-                    .display_cmd_tx
-                    .send(DisplayCmd::Player(notif))
-                    .await
-                    .is_err()
-                {
-                    error!("Display channel closed");
-                    return ControlFlow::Break(());
-                }
-            }
-        }
-
-        ControlFlow::Continue(())
     }
 }

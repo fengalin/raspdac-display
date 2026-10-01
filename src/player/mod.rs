@@ -1,5 +1,14 @@
+//! An aggregator task keeps per-player state, picks the active player,
+//! and sends the resulting `DisplayState` to the display thread.
+
 use std::sync::Arc;
 use std::time::Instant;
+
+mod aggregator;
+pub use aggregator::PlayerAggregator;
+
+mod mpris;
+pub use mpris::MprisPlayer;
 
 const DEFAULT_TITLE: &str = "";
 
