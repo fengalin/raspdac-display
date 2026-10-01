@@ -45,13 +45,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (player_update_tx, player_update_rx) = mpsc::channel(8);
     let agg = PlayerAggregator::new(player_update_rx, display_cmd_tx.clone());
     let pibuz = MprisPlayer::new("pibuz", player_update_tx.clone());
-    // let mpd = MpdPlayer::new(player_update_tx);
+    let mpd = MpdPlayer::new(player_update_tx);
 
     let mut task_handles = vec![
         tokio::spawn(display.into_task(stop_rx)),
         tokio::spawn(agg.into_task(stop_tx.subscribe())),
         tokio::spawn(pibuz.into_task(stop_tx.subscribe())),
-        // tokio::spawn(mpd.into_task(stop_tx.subscribe())),
+        tokio::spawn(mpd.into_task(stop_tx.subscribe())),
     ];
 
     let charge_point_listener = ChargePointListener::new(display_cmd_tx);

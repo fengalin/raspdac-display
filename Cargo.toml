@@ -17,6 +17,7 @@ path = "bin/ocpp_server_simu.rs"
 
 [dependencies]
 futures-lite = { version = "2.6.1", default-features = false }
+mpd_client = { git = "https://github.com/fengalin/mpd_client", branch = "update-dependencies" }
 rpi-pal = "0.22"
 serde = { version = "1.0.229", features = ["serde_derive"] }
 serde_json = "1.0.151"

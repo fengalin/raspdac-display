@@ -315,6 +315,8 @@ impl MprisPlayer {
             .build()
             .await?;
 
+        info!("connected");
+
         // Initial snapshot of the Player interface.
         let prop_values = props.get_all(player_iface.clone()).await?;
         self.apply_props(
@@ -417,10 +419,7 @@ impl MprisPlayer {
             return Ok(());
         };
 
-        debug!(player = %self.name,
-            old = %self.data.base_position_us, new = %pos,
-            "sampled pos",
-        );
+        debug!(player = %self.name, position = %pos, "sampled");
         self.data.base_position_us = pos
             .try_into()
             .inspect_err(|_| {

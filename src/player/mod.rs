@@ -7,10 +7,13 @@ use std::time::Instant;
 mod aggregator;
 pub use aggregator::PlayerAggregator;
 
+mod mpd;
+pub use mpd::MpdPlayer;
+
 mod mpris;
 pub use mpris::MprisPlayer;
 
-const DEFAULT_TITLE: &str = "";
+pub const DEFAULT_TITLE: &str = "";
 
 /// Player state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
