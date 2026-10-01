@@ -166,14 +166,6 @@ impl MprisPlayer {
                         }
                     }
                 }
-                "Rate" => {
-                    self.data.rate = val
-                        .try_into()
-                        .inspect_err(|err| {
-                            error!(player = %self.name, %err, "Rate");
-                        })
-                        .unwrap_or_default();
-                }
                 _ => {}
             }
         }

@@ -38,7 +38,6 @@ pub struct PlayerData {
     pub base_position_us: u64,
     pub base_position_instant: Instant,
     pub duration_us: u64,
-    pub rate: f64,
 }
 
 impl PlayerData {
@@ -54,7 +53,6 @@ impl Default for PlayerData {
             base_position_us: 0,
             base_position_instant: Instant::now(),
             duration_us: 0,
-            rate: 1.0,
         }
     }
 }
