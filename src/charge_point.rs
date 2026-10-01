@@ -5,7 +5,7 @@ use tracing::{debug, info, trace, warn};
 
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::charge_point_notif::{ChargeState, UNIX_SOCKET_PATH};
 use crate::display::DisplayCmd;
@@ -73,14 +73,17 @@ impl ChargePointListener {
 
             let data = &buf[..n];
             trace!(%n, ?data, "read");
-            let Ok(msg) = serde_json::from_slice::<ChargeState>(data) else {
+            let Ok(state) = serde_json::from_slice::<ChargeState>(data) else {
                 warn!("error deserializing message");
                 continue;
             };
-            debug!(?msg);
+            debug!(?state);
 
             self.display_cmd_tx
-                .send(DisplayCmd::ChargePoint(msg))
+                .send(DisplayCmd::ChargePoint {
+                    state,
+                    instant: Instant::now(),
+                })
                 .await?;
         }
     }
