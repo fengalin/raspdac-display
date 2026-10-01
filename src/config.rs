@@ -6,7 +6,6 @@ use std::time::Duration;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub display: DisplayConfig,
-    pub mpris: MprisConfig,
     pub scroll: ScrollConfig,
     pub idle: IdleConfig,
 }
@@ -31,30 +30,6 @@ impl Default for DisplayConfig {
             d5: 24,
             d6: 23,
             d7: 27,
-        }
-    }
-}
-
-/// MPRIS bus name configuration.
-#[derive(Debug, Clone)]
-pub struct MprisConfig {
-    pub mpd_bus: &'static str,
-    pub pibuz_bus: &'static str,
-}
-
-impl Default for MprisConfig {
-    fn default() -> Self {
-        let mpd_bus = cfg_select! {
-            feature = "simu" => {
-                "org.mpris.MediaPlayer2.clementine"
-            }
-            _ => {
-                "org.mpris.MediaPlayer2.mpd"
-            }
-        };
-        MprisConfig {
-            mpd_bus,
-            pibuz_bus: "org.mpris.MediaPlayer2.pibuz",
         }
     }
 }

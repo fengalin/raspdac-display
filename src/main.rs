@@ -19,12 +19,14 @@ cfg_select! {
 }
 
 mod mpris;
-use mpris::{Player, PlayerAggregator};
-
-mod charge_point_notif;
+use mpris::{MprisPlayer, PlayerAggregator};
 
 mod charge_point;
+mod charge_point_notif;
 use charge_point::ChargePointListener;
+
+mod player;
+use player::*;
 
 mod scroll;
 
@@ -45,14 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (player_update_tx, player_update_rx) = mpsc::channel(8);
     let agg = PlayerAggregator::new(player_update_rx, display_cmd_tx.clone());
-    let pibuz = Player::new(config.mpris.pibuz_bus, player_update_tx.clone())?;
-    let mpd = Player::new(config.mpris.mpd_bus, player_update_tx)?;
+    let pibuz = MprisPlayer::new("pibuz", player_update_tx.clone());
+    // let mpd = MpdPlayer::new(player_update_tx);
 
     let mut task_handles = vec![
         tokio::spawn(display.into_task(stop_rx)),
         tokio::spawn(agg.into_task(stop_tx.subscribe())),
         tokio::spawn(pibuz.into_task(stop_tx.subscribe())),
-        tokio::spawn(mpd.into_task(stop_tx.subscribe())),
+        // tokio::spawn(mpd.into_task(stop_tx.subscribe())),
     ];
 
     let charge_point_listener = ChargePointListener::new(display_cmd_tx);

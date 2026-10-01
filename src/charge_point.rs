@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::charge_point_notif::{ChargeState, UNIX_SOCKET_PATH};
 use crate::display::DisplayCmd;
 
-const RECONNECT: Duration = Duration::from_secs(5);
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChargePointError {
@@ -57,7 +57,7 @@ impl ChargePointListener {
                 Err(err) => trace!(%err, socket = ?socket_path, "connecting"),
             }
 
-            tokio::time::sleep(RECONNECT).await;
+            tokio::time::sleep(RECONNECT_TIMEOUT).await;
         }
     }
 

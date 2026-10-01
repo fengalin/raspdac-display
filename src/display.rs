@@ -18,23 +18,17 @@ use tracing::{debug, info};
 
 use crate::charge_point_notif::ChargeState;
 use crate::config::Config;
-use crate::mpris::{PlaybackState, PlayerData};
 use crate::scroll::ScrollState;
-use crate::{DriverError, Hd44780, LineNb, WIDTH};
+use crate::{
+    DISPLAY_WIDTH, DriverError, Hd44780, LineNb, PlaybackState, PlayerData, PlayerNotification,
+};
 
 const PLAYING_TICK: Duration = Duration::from_millis(750);
 
 /// Display Commands.
 #[derive(Debug)]
 pub enum DisplayCmd {
-    /// Player content update.
-    PlayerUpdate {
-        state: PlaybackState,
-        data: PlayerData,
-    },
-    /// New player base position.
-    PlayerBasePosition { position_us: u64, instant: Instant },
-    /// Charge Point OCPP update.
+    Player(PlayerNotification),
     ChargePoint(ChargeState),
 }
 
@@ -104,10 +98,10 @@ impl Display {
 
     async fn on_command(&mut self, cmd: DisplayCmd) {
         match cmd {
-            DisplayCmd::PlayerUpdate {
+            DisplayCmd::Player(PlayerNotification::Update {
                 state: player_state,
                 data,
-            } => {
+            }) => {
                 match self.state {
                     DisplayState::Player => (),
                     DisplayState::ChargePoint => {
@@ -164,10 +158,10 @@ impl Display {
                     }
                 }
             }
-            DisplayCmd::PlayerBasePosition {
+            DisplayCmd::Player(PlayerNotification::BasePosition {
                 position_us,
                 instant,
-            } => {
+            }) => {
                 debug!(base_pos_us = %position_us, state = ?self.state, "update");
                 self.player_data.base_position_us = position_us;
                 self.player_data.base_position_instant = instant;
@@ -447,13 +441,14 @@ struct RowDisplay {
 
 impl RowDisplay {
     /// Sanitize and prepare a row. Empty text renders as blank.
+    #[expect(unused)]
     fn new(speed: f32, dwell_secs: f32) -> Self {
-        // let mut sanitized = sanitize(text, WIDTH * 3).into_bytes();
-        // let scroll = if sanitized.len() > WIDTH {
+        // let mut sanitized = sanitize(text, DISPLAY_WIDTH * 3).into_bytes();
+        // let scroll = if sanitized.len() > DISPLAY_WIDTH {
         // FIXME
         // Some(ScrollState::new(
         //     sanitized.clone(),
-        //     WIDTH,
+        //     DISPLAY_WIDTH,
         //     speed,
         //     dwell_secs,
         // ))
@@ -462,11 +457,12 @@ impl RowDisplay {
         //     None
         // };
         RowDisplay {
-            full_text: String::with_capacity(WIDTH * 2),
+            full_text: String::with_capacity(DISPLAY_WIDTH * 2),
             scroll: None,
         }
     }
 
+    #[expect(unused)]
     fn tick(&mut self, dt: f32) {
         if let Some(ref mut scroll) = self.scroll {
             scroll.tick(dt);
@@ -486,6 +482,6 @@ impl RowDisplay {
     fn set_text(&mut self, title: &str) {
         self.full_text.clear();
         self.full_text
-            .push_str(&title[..usize::min(title.len(), 1 + WIDTH * 2)]);
+            .push_str(&title[..usize::min(title.len(), 1 + DISPLAY_WIDTH * 2)]);
     }
 }

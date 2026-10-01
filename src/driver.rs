@@ -7,7 +7,7 @@ use tokio::time::sleep;
 use crate::config::DisplayConfig;
 
 /// Number of display cells per row.
-pub const WIDTH: usize = 16;
+pub const DISPLAY_WIDTH: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
@@ -143,7 +143,7 @@ impl Hd44780 {
         self.rs.set_high();
 
         let mut cur_len = 0u8;
-        for byte in data.map(map_char).take(WIDTH) {
+        for byte in data.map(map_char).take(DISPLAY_WIDTH) {
             self.send_nibble((byte >> 4) & 0x0F).await;
             sleep(Duration::from_micros(1)).await;
             self.send_nibble(byte & 0x0F).await;

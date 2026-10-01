@@ -35,6 +35,7 @@ pub struct ScrollState {
 
 impl ScrollState {
     /// Create a new scroll state. Panics if width is 0 or text is empty.
+    #[expect(unused)]
     pub fn new(text: Vec<u8>, width: usize, speed: f32, dwell_secs: f32) -> Self {
         assert!(width > 0);
         assert!(!text.is_empty());
@@ -100,6 +101,7 @@ impl ScrollState {
     }
 
     /// Get the visible characters for the current window.
+    #[expect(unused)]
     pub fn visible(&self) -> &[u8] {
         let window_start = self.offset as usize;
         let end = (window_start + self.width).min(self.text.len());

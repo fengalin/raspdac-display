@@ -7,7 +7,7 @@ use crate::config::DisplayConfig;
 #[path = "driver.rs"]
 #[allow(unused)]
 mod driver;
-pub use driver::{DriverError, LineNb, WIDTH};
+pub use driver::{DISPLAY_WIDTH, DriverError, LineNb};
 
 /// HD44780 driver for 4-bit parallel mode.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl Hd44780 {
             LineNb::Two => (2, self.last_len_line2),
         };
 
-        let text = data.take(WIDTH).collect::<String>();
+        let text = data.take(DISPLAY_WIDTH).collect::<String>();
         let overide = last_len.checked_sub(text.len() as u8);
 
         info!(%line, %text, ?overide);

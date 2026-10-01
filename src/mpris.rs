@@ -12,7 +12,6 @@
 //! and sends the resulting `DisplayState` to the display thread.
 
 use std::ops::ControlFlow;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_lite::stream::StreamExt;
@@ -20,19 +19,20 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, trace, warn};
 use zbus::Message;
 use zbus::fdo::{DBusProxy, NameOwnerChanged, PropertiesChanged, PropertiesProxy};
-use zbus::names::{BusName, InterfaceName};
+use zbus::names::{InterfaceName, OwnedBusName};
 use zbus::zvariant::Value;
 
-use crate::display::DisplayCmd;
+use crate::{
+    NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotification, display::DisplayCmd,
+};
 
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 /// Interval between `Position` property resamples (drift correction).
 const POSITION_RESYNC: Duration = Duration::from_secs(30);
-/// Delay before reconnecting after the listener loop ends.
-const RECONNECT: Duration = Duration::from_secs(5);
 
-const DEFAULT_TITLE: &str = "";
+/// Delay before reconnecting after the listener loop ends.
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MprisError {
@@ -43,24 +43,7 @@ pub enum MprisError {
     #[error("invalid bus name: {0}")]
     BusName(#[from] zbus::names::Error),
     #[error("channel error: {0}")]
-    Channel(#[from] tokio::sync::mpsc::error::SendError<PlayerNotification>),
-}
-
-/// MPRIS playback status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaybackState {
-    Playing,
-    Paused,
-    Stopped,
-}
-
-impl PlaybackState {
-    pub fn is_playing(self) -> bool {
-        matches!(self, PlaybackState::Playing)
-    }
-    pub fn is_paused(self) -> bool {
-        matches!(self, PlaybackState::Paused)
-    }
+    Channel(#[from] tokio::sync::mpsc::error::SendError<NamedPlayerNotification>),
 }
 
 impl<'a> From<&'a Value<'a>> for PlaybackState {
@@ -83,67 +66,23 @@ impl<'a> From<&'a Value<'a>> for PlaybackState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlayerData {
-    pub title: Arc<str>,
-    pub base_position_us: u64,
-    pub base_position_instant: Instant,
-    pub duration_us: u64,
-    pub rate: f64,
-}
-
-impl PlayerData {
-    pub fn clear(&mut self) {
-        *self = Default::default();
-    }
-}
-
-impl Default for PlayerData {
-    fn default() -> Self {
-        PlayerData {
-            title: DEFAULT_TITLE.into(),
-            base_position_us: 0,
-            base_position_instant: Instant::now(),
-            duration_us: 0,
-            rate: 1.0,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum PlayerNotification {
-    Update {
-        bus_name: Arc<BusName<'static>>,
-        state: PlaybackState,
-        data: PlayerData,
-    },
-    BasePosition {
-        bus_name: Arc<BusName<'static>>,
-        position_us: u64,
-        instant: Instant,
-    },
-}
-
 /// Per-player state update sent to the aggregator.
 #[derive(Debug)]
-pub struct Player {
-    bus_name: Arc<BusName<'static>>,
-    player_notif_tx: mpsc::Sender<PlayerNotification>,
+pub struct MprisPlayer {
+    name: &'static str,
+    player_notif_tx: mpsc::Sender<NamedPlayerNotification>,
     state: PlaybackState,
     data: PlayerData,
 }
 
-impl Player {
-    pub fn new(
-        bus_name: &'static str,
-        player_notif_tx: mpsc::Sender<PlayerNotification>,
-    ) -> Result<Self, MprisError> {
-        Ok(Player {
-            bus_name: BusName::try_from(bus_name)?.into(),
+impl MprisPlayer {
+    pub fn new(name: &'static str, player_notif_tx: mpsc::Sender<NamedPlayerNotification>) -> Self {
+        MprisPlayer {
+            name,
             player_notif_tx,
             state: PlaybackState::Stopped,
             data: Default::default(),
-        })
+        }
     }
 
     /// Applies one `PropertiesChanged` batch for the Player interface.
@@ -157,7 +96,7 @@ impl Player {
                 "PlaybackStatus" => {
                     let new_state = val.into();
                     if self.state != new_state {
-                        debug!(player = %self.bus_name,
+                        debug!(player = %self.name,
                             old = ?self.state, new = ?new_state,
                             "new status",
                         );
@@ -175,13 +114,13 @@ impl Player {
                     let title = metadata
                         .get::<_, &str>(&"xesam:title")
                         .inspect_err(|err| {
-                            error!(player = %self.bus_name, %err, "Metadata title");
+                            error!(player = %self.name, %err, "Metadata title");
                         })
                         .ok()
                         .flatten()
                         .unwrap_or_default();
                     if self.data.title.as_ref() != title {
-                        debug!(player = %self.bus_name,
+                        debug!(player = %self.name,
                             old = %self.data.title, new = %title,
                             "new title",
                         );
@@ -192,19 +131,19 @@ impl Player {
                     let duration: u64 = metadata
                         .get::<_, i64>(&"mpris:length")
                         .inspect_err(|err| {
-                            error!(player = %self.bus_name, %err, "Metadata length");
+                            error!(player = %self.name, %err, "Metadata length");
                         })
                         .ok()
                         .flatten()
                         .unwrap_or_default()
                         .try_into()
                         .inspect_err(|err| {
-                            error!(player = %self.bus_name, %err, "Metadata negative length");
+                            error!(player = %self.name, %err, "Metadata negative length");
                         })
                         .ok()
                         .unwrap_or_default();
                     if self.data.duration_us != duration {
-                        debug!(player = %self.bus_name,
+                        debug!(player = %self.name,
                             old = %self.data.duration_us, new = %duration,
                             "new duration",
                         );
@@ -213,7 +152,7 @@ impl Player {
                     }
                 }
                 "TrackId" => {
-                    debug!(player = %self.bus_name, new = ?val, "new track id");
+                    debug!(player = %self.name, new = ?val, "new track id");
                     // FIXME
                     // must_notify = true
                 }
@@ -221,17 +160,17 @@ impl Player {
                     // note: position is only set on initial props.get_all()
                     match i64::try_from(val) {
                         Ok(pos) => {
-                            debug!(player = %self.bus_name, new = %pos, "new pos");
+                            debug!(player = %self.name, new = %pos, "new pos");
                             self.data.base_position_us = pos
                                 .try_into()
                                 .inspect_err(|err| {
-                                    error!(player = %self.bus_name, %err, "negative Position");
+                                    error!(player = %self.name, %err, "negative Position");
                                 })
                                 .unwrap_or_default();
                             self.data.base_position_instant = Instant::now();
                         }
                         Err(err) => {
-                            error!(player = %self.bus_name, %err, "type mismatch reading Position");
+                            error!(player = %self.name, %err, "type mismatch reading Position");
                         }
                     }
                 }
@@ -239,7 +178,7 @@ impl Player {
                     self.data.rate = val
                         .try_into()
                         .inspect_err(|err| {
-                            error!(player = %self.bus_name, %err, "Rate");
+                            error!(player = %self.name, %err, "Rate");
                         })
                         .unwrap_or_default();
                 }
@@ -258,17 +197,19 @@ impl Player {
     ) -> Result<(), MprisError> {
         let args = props_changed.args()?;
         if args.interface_name() != player_iface {
-            debug!(player = ?self.bus_name, iface = ?args.interface_name(), "rejecting msg for other iface");
+            debug!(player = ?self.name, iface = ?args.interface_name(), "rejecting msg for other iface");
             return Ok(());
         }
         if self.apply_props(args.changed_properties().iter().map(|(k, v)| (*k, v))) {
             self.sample_position(props, player_iface).await?;
 
             self.player_notif_tx
-                .send(PlayerNotification::Update {
-                    bus_name: self.bus_name.clone(),
-                    state: self.state,
-                    data: self.data.clone(),
+                .send(NamedPlayerNotification {
+                    player_name: self.name,
+                    notif: PlayerNotification::Update {
+                        state: self.state,
+                        data: self.data.clone(),
+                    },
                 })
                 .await?;
         }
@@ -283,7 +224,7 @@ impl Player {
         if name_owner_changed.args()?.new_owner().is_none() {
             return Ok(());
         }
-        debug!(player = ?self.bus_name, "owner changed");
+        debug!(player = ?self.name, "owner changed");
 
         Ok(())
     }
@@ -292,16 +233,18 @@ impl Player {
         if let Ok((pos,)) = seeked
             .body()
             .deserialize::<(u64,)>()
-            .inspect(|err| error!(player = %self.bus_name, ?err, "seeked msg deser error"))
+            .inspect(|err| error!(player = %self.name, ?err, "seeked msg deser error"))
         {
-            debug!(player = %self.bus_name, %pos, "seeked message");
+            debug!(player = %self.name, %pos, "seeked message");
             self.data.base_position_us = pos;
             self.data.base_position_instant = Instant::now();
             self.player_notif_tx
-                .send(PlayerNotification::BasePosition {
-                    bus_name: self.bus_name.clone(),
-                    position_us: self.data.base_position_us,
-                    instant: self.data.base_position_instant,
+                .send(NamedPlayerNotification {
+                    player_name: self.name,
+                    notif: PlayerNotification::BasePosition {
+                        position_us: self.data.base_position_us,
+                        instant: self.data.base_position_instant,
+                    },
                 })
                 .await?;
         }
@@ -320,7 +263,7 @@ impl Player {
             tokio::select! {
                 biased;
                 _  = stop_rx.recv() => {
-                    info!(player = %self.bus_name, "shutting down due to stop request");
+                    info!(player = %self.name, "shutting down due to stop request");
                     break;
                 }
                 _ = self.connect() => (),
@@ -331,21 +274,23 @@ impl Player {
     async fn connect(&mut self) -> Result<(), MprisError> {
         loop {
             match self.listen().await {
-                Ok(()) => info!(player = %self.bus_name, "left the bus"),
-                Err(err) => warn!(player = %self.bus_name, %err, "listener"),
+                Ok(()) => info!(player = %self.name, "left the bus"),
+                Err(err) => warn!(player = %self.name, %err, "listener"),
             }
 
             self.clear();
             self.player_notif_tx
-                .send(PlayerNotification::Update {
-                    bus_name: self.bus_name.clone(),
-                    state: self.state,
-                    data: self.data.clone(),
+                .send(NamedPlayerNotification {
+                    player_name: self.name,
+                    notif: PlayerNotification::Update {
+                        state: self.state,
+                        data: self.data.clone(),
+                    },
                 })
                 .await
                 .inspect_err(|err| error!(%err, "Player notif channel closed"))?;
 
-            tokio::time::sleep(RECONNECT).await;
+            tokio::time::sleep(RECONNECT_TIMEOUT).await;
         }
     }
 
@@ -358,11 +303,12 @@ impl Player {
         let player_iface = InterfaceName::try_from(PLAYER_IFACE)?;
         let dbus = DBusProxy::new(&conn).await?;
 
+        let bus_name = OwnedBusName::try_from(format!("org.mpris.MediaPlayer2.{}", self.name))?;
         // Wait for the player to appear on the bus
-        if !dbus.name_has_owner(self.bus_name.as_ref().into()).await? {
-            info!(player = %self.bus_name, "waiting on the session bus...");
+        if !dbus.name_has_owner(bus_name.as_ref()).await? {
+            info!(player = %self.name, "waiting on the session bus...");
             let mut stream = dbus
-                .receive_name_owner_changed_with_args(&[(0, self.bus_name.as_str())])
+                .receive_name_owner_changed_with_args(&[(0, bus_name.as_str())])
                 .await?;
             while let Some(signal) = stream.next().await {
                 if signal.args()?.new_owner().is_some() {
@@ -372,7 +318,7 @@ impl Player {
         }
 
         let props = PropertiesProxy::builder(&conn)
-            .destination(self.bus_name.as_ref())?
+            .destination(bus_name.as_ref())?
             .path(OBJECT_PATH)?
             .build()
             .await?;
@@ -386,21 +332,22 @@ impl Player {
         );
 
         self.player_notif_tx
-            .send(PlayerNotification::Update {
-                bus_name: self.bus_name.clone(),
-                state: self.state,
-                data: self.data.clone(),
+            .send(NamedPlayerNotification {
+                player_name: self.name,
+                notif: PlayerNotification::Update {
+                    state: self.state,
+                    data: self.data.clone(),
+                },
             })
             .await?;
 
         // Signal streams.
         let mut props_changed_stream = props.receive_properties_changed().await?;
         let mut name_owner_changed_stream = dbus
-            .receive_name_owner_changed_with_args(&[(0, self.bus_name.as_str())])
+            .receive_name_owner_changed_with_args(&[(0, bus_name.as_str())])
             .await?;
         let player =
-            zbus::proxy::Proxy::new(&conn, self.bus_name.as_ref(), OBJECT_PATH, PLAYER_IFACE)
-                .await?;
+            zbus::proxy::Proxy::new(&conn, bus_name.as_ref(), OBJECT_PATH, PLAYER_IFACE).await?;
         let mut seeked_stream = player.receive_signal("Seeked").await?;
 
         let mut resync = tokio::time::interval(POSITION_RESYNC);
@@ -426,15 +373,17 @@ impl Player {
                     _ = resync.tick() => {
                         self.sample_position(&props, &player_iface).await?;
                         self.player_notif_tx
-                            .send(PlayerNotification::BasePosition {
-                                bus_name: self.bus_name.clone(),
-                                position_us: self.data.base_position_us,
-                                instant: self.data.base_position_instant,
+                            .send(NamedPlayerNotification {
+                                player_name: self.name,
+                                notif: PlayerNotification::BasePosition {
+                                    position_us: self.data.base_position_us,
+                                    instant: self.data.base_position_instant,
+                                }
                             })
                             .await?;
                     },
                     else => {
-                        info!(player = %self.bus_name, "dbus streams terminated");
+                        info!(player = %self.name, "dbus streams terminated");
                         break;
                     }
                 }
@@ -455,7 +404,7 @@ impl Player {
                         self.on_seeked_message(seeked).await?;
                     }
                     else => {
-                        info!(player = %self.bus_name, "dbus streams terminated");
+                        info!(player = %self.name, "dbus streams terminated");
                         break;
                     }
                 }
@@ -472,15 +421,15 @@ impl Player {
     ) -> Result<(), MprisError> {
         let now = Instant::now();
         let Ok(val) = props.get(player_iface.clone(), "Position").await else {
-            info!(player = %self.bus_name, "couldn't get Position");
+            info!(player = %self.name, "couldn't get Position");
             return Ok(());
         };
         let Ok(pos) = i64::try_from(val) else {
-            error!(player = %self.bus_name, "unexpected type for Position");
+            error!(player = %self.name, "unexpected type for Position");
             return Ok(());
         };
 
-        debug!(player = %self.bus_name,
+        debug!(player = %self.name,
             old = %self.data.base_position_us, new = %pos,
             "sampled pos",
         );
@@ -498,20 +447,20 @@ impl Player {
 
 #[derive(Debug)]
 struct ActivePlayer {
-    bus_name: Arc<BusName<'static>>,
+    name: &'static str,
     state: PlaybackState,
 }
 
 #[derive(Debug)]
 pub struct PlayerAggregator {
     last_active: Option<ActivePlayer>,
-    player_notif_rx: mpsc::Receiver<PlayerNotification>,
+    player_notif_rx: mpsc::Receiver<NamedPlayerNotification>,
     display_cmd_tx: mpsc::Sender<DisplayCmd>,
 }
 
 impl PlayerAggregator {
     pub fn new(
-        player_notif_rx: mpsc::Receiver<PlayerNotification>,
+        player_notif_rx: mpsc::Receiver<NamedPlayerNotification>,
         display_cmd_tx: mpsc::Sender<DisplayCmd>,
     ) -> Self {
         PlayerAggregator {
@@ -547,21 +496,20 @@ impl PlayerAggregator {
         }
     }
 
-    async fn handle(&mut self, notif: PlayerNotification) -> ControlFlow<()> {
+    async fn handle(&mut self, notif: NamedPlayerNotification) -> ControlFlow<()> {
         match notif {
-            PlayerNotification::Update {
-                bus_name,
-                state,
-                data,
+            NamedPlayerNotification {
+                player_name,
+                notif: PlayerNotification::Update { state, data },
             } => {
-                trace!(player = %bus_name, ?state, ?data, "update notif");
+                trace!(player = %player_name, ?state, ?data, "update");
 
-                let active_player = self.last_active.get_or_insert_with(|| ActivePlayer {
-                    bus_name: bus_name.clone(),
+                let active_player = self.last_active.get_or_insert(ActivePlayer {
+                    name: player_name,
                     state,
                 });
 
-                if active_player.bus_name != bus_name {
+                if active_player.name != player_name {
                     use PlaybackState::*;
                     match (active_player.state, state) {
                         (Playing, _) => return ControlFlow::Continue(()),
@@ -570,12 +518,18 @@ impl PlayerAggregator {
                         _ => return ControlFlow::Continue(()),
                     }
 
-                    self.last_active = Some(ActivePlayer { bus_name, state });
+                    self.last_active = Some(ActivePlayer {
+                        name: player_name,
+                        state,
+                    });
                 }
 
                 if self
                     .display_cmd_tx
-                    .send(DisplayCmd::PlayerUpdate { state, data })
+                    .send(DisplayCmd::Player(PlayerNotification::Update {
+                        state,
+                        data,
+                    }))
                     .await
                     .is_err()
                 {
@@ -583,28 +537,21 @@ impl PlayerAggregator {
                     return ControlFlow::Break(());
                 }
             }
-            PlayerNotification::BasePosition {
-                bus_name,
-                position_us,
-                instant,
-            } => {
-                trace!(player = %bus_name, %position_us, ?instant, "position notif");
+            NamedPlayerNotification { player_name, notif } => {
+                trace!(player = %player_name, ?notif);
 
                 let Some(ref active_player) = self.last_active else {
-                    info!(player = %bus_name, "aggregator got position notif but no active player");
+                    info!(player = %player_name, "aggregator got position notif but no active player");
                     return ControlFlow::Continue(());
                 };
 
-                if active_player.bus_name != bus_name {
+                if active_player.name != player_name {
                     return ControlFlow::Continue(());
                 }
 
                 if self
                     .display_cmd_tx
-                    .send(DisplayCmd::PlayerBasePosition {
-                        position_us,
-                        instant,
-                    })
+                    .send(DisplayCmd::Player(notif))
                     .await
                     .is_err()
                 {
