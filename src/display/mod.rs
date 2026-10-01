@@ -252,7 +252,7 @@ impl Display {
             let state_prefix = match player_state {
                 PlaybackState::Playing => "|> ",
                 PlaybackState::Paused => "|| ",
-                PlaybackState::Stopped => "⛶  music",
+                PlaybackState::Stopped => "⛶  Musique",
             };
 
             if !player_state.is_stopped() {
@@ -346,13 +346,13 @@ impl Display {
                     .write_line(
                         LineNb::One,
                         if self.charge_state.is_charging() {
-                            "|>  "
+                            "|> "
                         } else {
-                            "||  "
+                            "|| "
                         }
                         .chars()
                         .chain(
-                            format!("{:>2} / {:>2}% SoC", progress.soc, progress.target_soc)
+                            format!("{:>2} / {:>2}% bat", progress.soc, progress.target_soc)
                                 .chars(),
                         ),
                     )
@@ -370,7 +370,7 @@ impl Display {
                 self.oled
                     .write_line(
                         LineNb::Two,
-                        format!("    {minutes:02}:{secs:02} left").chars(),
+                        format!("{minutes:02}:{secs:02} prévues").chars(),
                     )
                     .await;
             }
@@ -382,7 +382,7 @@ impl Display {
                     Some(self.idle_timeout)
                 };
                 self.oled
-                    .write_line(LineNb::One, "⛶  charge point".chars())
+                    .write_line(LineNb::One, "⛶  Borne VE".chars())
                     .await;
                 self.oled
                     .write_line(LineNb::Two, self.charge_state.name().chars())

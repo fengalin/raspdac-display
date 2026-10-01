@@ -24,15 +24,15 @@ impl ChargeState {
     pub fn name(&self) -> &'static str {
         use ChargeState::*;
         match self {
-            Available => "available",
-            Preparing => "preparing",
-            Charging(_) => "charging",
-            SuspendedEvse(_) => "suspended EVSE",
-            SuspendedEv => "suspended EV",
-            StoppedByUser => "stopped user",
-            Finishing => "finishing",
-            UnknownSession => "unknown session",
-            Error => "error",
+            Available => "disponible",
+            Preparing => "en préparation",
+            Charging(_) => "en charge",
+            SuspendedEvse(_) => "pause programmée",
+            SuspendedEv => "arrêt véhicule",
+            StoppedByUser => "arrêt externe",
+            Finishing => "VE déconnecté",
+            UnknownSession => "session inconnue",
+            Error => "erreur",
         }
     }
 
