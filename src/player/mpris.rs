@@ -352,7 +352,9 @@ impl MprisPlayer {
                     Some(seeked) = seeked_stream.next() => {
                         self.on_seeked_message(seeked).await?;
                     }
-                    _ = time::sleep(Instant::now() + RESAMPLE_INTERVAL - self.data.base_position_instant) => {
+                    _ = time::sleep(
+                        RESAMPLE_INTERVAL.saturating_sub(self.data.base_position_instant.elapsed())
+                    ) => {
                         self.sample_position(&props, &player_iface).await?;
                         self.player_notif_tx
                             .send(NamedPlayerNotification {

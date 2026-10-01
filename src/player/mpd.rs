@@ -96,13 +96,10 @@ impl MpdPlayer {
         let (mut client, mut state_changes) = Client::connect(stream).await?;
         info!("connected");
 
-        self.on_changed(&mut client).await?;
-
         loop {
             if self.state == PlaybackState::Playing {
                 tokio::select! {
                     biased;
-
                     state_changes_res = state_changes.next() => {
                         match state_changes_res {
                             Some(ConnectionEvent::SubsystemChange(Subsystem::Player)) => {
@@ -120,8 +117,9 @@ impl MpdPlayer {
                             }
                         }
                     }
-
-                    _ = time::sleep(Instant::now() + RESAMPLE_INTERVAL - self.data.base_position_instant) => {
+                    _ = time::sleep(
+                        RESAMPLE_INTERVAL.saturating_sub(self.data.base_position_instant.elapsed())
+                    ) => {
                         self.update_status(&mut client).await?;
 
                         self.player_notif_tx

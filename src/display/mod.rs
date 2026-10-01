@@ -10,7 +10,7 @@ use std::fmt::Write;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc};
-use tokio::time::sleep;
+use tokio::time;
 use tracing::{debug, info};
 
 use crate::charge_point::ChargeState;
@@ -106,18 +106,18 @@ impl Display {
     }
 
     /// Timer based display update
-    async fn on_tick(&mut self, now: Instant) {
+    async fn on_tick(&mut self) {
         use DisplayState::*;
         use PlaybackState::*;
         match (self.state, self.player_state) {
             (Player, Playing) => {
-                // let dt = (now - self.last_tick).as_secs_f32();
+                // let dt = self.last_tick.elaspsed().as_secs_f32();
                 // FIXME switch update_line2 depending on animation
                 self.update_line1 = true;
-                self.update_oled_in_player_state(now).await;
+                self.update_oled_in_player_state().await;
             }
             (ChargePoint, _) if self.charge_state.is_charging() => {
-                self.update_oled_in_charge_point_state(now).await;
+                self.update_oled_in_charge_point_state().await;
             }
             (ChargePoint, player_state) if player_state.is_playing() => {
                 info!(
@@ -208,11 +208,11 @@ impl Display {
         }
 
         if can_display {
-            self.update_oled_in_player_state(Instant::now()).await;
+            self.update_oled_in_player_state().await;
         }
     }
 
-    async fn update_oled_in_player_state(&mut self, now: Instant) {
+    async fn update_oled_in_player_state(&mut self) {
         fn format_time(time_str: &mut String, usecs: u64) {
             let total_secs = (usecs + 500_000) / 1_000_000;
             let minutes = total_secs / 60;
@@ -237,8 +237,7 @@ impl Display {
             self.update_line1 = false;
             format_time(
                 position_str,
-                data.base_position_us
-                    + now.duration_since(data.base_position_instant).as_micros() as u64,
+                data.base_position_us + data.base_position_instant.elapsed().as_micros() as u64,
             );
             // might want to skip if duration did not change
             format_time(duration_str, data.duration_us);
@@ -322,10 +321,10 @@ impl Display {
         self.charge_state = charge_state;
         self.charge_state_base_instant = instant;
 
-        self.update_oled_in_charge_point_state(Instant::now()).await;
+        self.update_oled_in_charge_point_state().await;
     }
 
-    async fn update_oled_in_charge_point_state(&mut self, now: Instant) {
+    async fn update_oled_in_charge_point_state(&mut self) {
         use ChargeState::*;
         match &self.charge_state {
             Charging(progress) | SuspendedEvse(progress) => {
@@ -349,7 +348,7 @@ impl Display {
                 let seconds_left = if self.charge_state.is_charging() {
                     progress
                         .seconds_left
-                        .saturating_sub((now - self.charge_state_base_instant).as_secs() as u16)
+                        .saturating_sub(self.charge_state_base_instant.elapsed().as_secs() as u16)
                 } else {
                     progress.seconds_left
                 };
@@ -422,7 +421,6 @@ impl Display {
             if let Some(tick_period) = self.tick_timeout {
                 tokio::select! {
                     biased;
-
                     cmd = self.cmd_rx.recv() => match cmd {
                         Some(cmd) => self.on_command(cmd).await,
                         None => {
@@ -430,11 +428,11 @@ impl Display {
                             break;
                         }
                     },
-
-                    _ = sleep(Instant::now() + tick_period - self.last_tick) => {
-                        let now = Instant::now();
-                        self.last_tick = now;
-                        self.on_tick(now).await;
+                    _ = time::sleep(
+                        tick_period.saturating_sub(self.last_tick.elapsed())
+                    ) => {
+                        self.last_tick = Instant::now();
+                        self.on_tick().await;
                     }
                 }
             } else {
