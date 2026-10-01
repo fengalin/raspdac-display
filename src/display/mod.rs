@@ -183,7 +183,14 @@ impl Display {
                     self.tick_timeout = Some(self.idle_timeout);
                 }
             }
-            PlaybackState::Stopped => return,
+            PlaybackState::Stopped => {
+                self.player_state = PlaybackState::Stopped;
+                self.update_line1 |= can_display;
+
+                if self.state.is_player() {
+                    self.tick_timeout = Some(self.idle_timeout);
+                }
+            }
             _ => (),
         }
 
@@ -242,19 +249,25 @@ impl Display {
             // might want to skip if duration did not change
             format_time(duration_str, data.duration_us);
 
-            oled.write_line(
-                LineNb::One,
-                if player_state.is_playing() {
-                    "|> "
-                } else {
-                    "|| "
-                }
-                .chars()
-                .chain(position_str.chars())
-                .chain(" / ".chars())
-                .chain(duration_str.chars()),
-            )
-            .await;
+            let state_prefix = match player_state {
+                PlaybackState::Playing => "|> ",
+                PlaybackState::Paused => "|| ",
+                PlaybackState::Stopped => "⛶  music",
+            };
+
+            if !player_state.is_stopped() {
+                oled.write_line(
+                    LineNb::One,
+                    state_prefix
+                        .chars()
+                        .chain(position_str.chars())
+                        .chain(" / ".chars())
+                        .chain(duration_str.chars()),
+                )
+                .await;
+            } else {
+                oled.write_line(LineNb::One, state_prefix.chars()).await;
+            }
         }
 
         if !self.update_line2 {

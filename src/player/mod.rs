@@ -30,6 +30,9 @@ impl PlaybackState {
     pub fn is_paused(self) -> bool {
         matches!(self, PlaybackState::Paused)
     }
+    pub fn is_stopped(self) -> bool {
+        matches!(self, PlaybackState::Stopped)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
