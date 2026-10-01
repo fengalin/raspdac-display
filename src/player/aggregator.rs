@@ -78,10 +78,14 @@ impl PlayerAggregator {
                         _ => return ControlFlow::Continue(()),
                     }
 
+                    info!(old_active_player = %active_player.name, new = %player_name);
                     self.last_active = Some(ActivePlayer {
                         name: player_name,
                         state,
                     });
+                } else if active_player.state != state {
+                    info!(active_player = %active_player.name, old_state = ?active_player.state, new = ?state);
+                    active_player.state = state;
                 }
 
                 if self
