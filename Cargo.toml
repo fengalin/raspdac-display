@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "raspdac-display"
-path = "src/main.rs"
+path = "bin/raspdac_display.rs"
 
 [[bin]]
 name = "check-oled"

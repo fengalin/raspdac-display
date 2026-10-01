@@ -1,20 +1,4 @@
-#[path = "../src/config.rs"]
-#[allow(unused)]
-mod config;
-
-cfg_select! {
-    feature = "simu" => {
-        #[path = "../src/display/simu.rs"]
-        mod simu;
-        pub use simu::*;
-    }
-    _ => {
-        #[path = "../src/display/driver.rs"]
-        #[allow(unused)]
-        mod driver;
-        pub use driver::*;
-    }
-}
+use raspdac_display::{Hd44780, LineNb, config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -6,10 +6,7 @@ use std::error::Error;
 use std::io;
 use std::path::Path;
 
-#[path = "../src/charge_point/notification.rs"]
-#[allow(unused)]
-mod charge_point_notif;
-use charge_point_notif::{ChargeProgress, ChargeState, UNIX_SOCKET_PATH};
+use raspdac_display::{ChargeProgress, ChargeState, UNIX_SOCKET_PATH};
 
 async fn run(listener: UnixListener) -> io::Result<()> {
     loop {
