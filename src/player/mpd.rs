@@ -67,26 +67,37 @@ impl MpdPlayer {
     }
 
     async fn connect(&mut self) -> Result<(), MpdError> {
+        let mut log_connetion_failure = true;
         loop {
             match UnixStream::connect(SOCKET_PATH).await {
-                Ok(stream) => match self.listen(stream).await {
-                    Ok(()) => info!("left the socket"),
-                    Err(err) => warn!(%err, "listener"),
-                },
-                Err(err) => warn!(%err, "connecting"),
+                Ok(stream) => {
+                    log_connetion_failure = true;
+                    match self.listen(stream).await {
+                        Ok(()) => info!("left the socket"),
+                        Err(err) => warn!(%err, "listener"),
+                    }
+                }
+                Err(err) => {
+                    if log_connetion_failure {
+                        warn!(%err, "connecting");
+                        log_connetion_failure = false;
+                    }
+                }
             }
 
-            self.clear();
-            self.player_notif_tx
-                .send(NamedPlayerNotification {
-                    player_name: PLAYER_NAME,
-                    notif: PlayerNotification::Update {
-                        state: self.state,
-                        data: self.data.clone(),
-                    },
-                })
-                .await
-                .inspect_err(|err| error!(%err, "Player notif channel closed"))?;
+            if !self.state.is_stopped() {
+                self.clear();
+                self.player_notif_tx
+                    .send(NamedPlayerNotification {
+                        player_name: PLAYER_NAME,
+                        notif: PlayerNotification::Update {
+                            state: self.state,
+                            data: self.data.clone(),
+                        },
+                    })
+                    .await
+                    .inspect_err(|err| error!(%err, "Player notif channel closed"))?;
+            }
 
             tokio::time::sleep(RECONNECT_TIMEOUT).await;
         }
