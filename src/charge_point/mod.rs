@@ -1,7 +1,8 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, trace, warn};
+use tokio::time;
+use tracing::{debug, error, info, trace, warn};
 
 use std::io;
 use std::path::Path;
@@ -13,6 +14,12 @@ mod notification;
 pub use notification::*;
 
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_mins(cfg_select! {
+    // expecting we target the raspberry pi
+    all(target_arch = "aarch64", target_os = "linux") => 70,
+    // simu
+    _ => 1,
+});
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChargePointError {
@@ -48,45 +55,88 @@ impl ChargePointListener {
 
     async fn listen(&mut self) {
         let socket_path = Path::new(UNIX_SOCKET_PATH);
+        let mut log_connetion_failure = true;
         loop {
             match UnixStream::connect(&socket_path).await {
                 Ok(stream) => {
                     info!("connected");
+                    log_connetion_failure = true;
                     if let Err(err) = self.handler(stream).await {
                         warn!(%err, "handler");
                     }
                 }
-                Err(err) => trace!(%err, socket = ?socket_path, "connecting"),
+                Err(err) => {
+                    if log_connetion_failure {
+                        warn!(%err, socket = ?socket_path, "connecting");
+                        if let Err(err) = self
+                            .display_cmd_tx
+                            .send(DisplayCmd::ChargePoint {
+                                notification: ChargePointNotification::ServerDisconnected,
+                                instant: Instant::now(),
+                            })
+                            .await
+                        {
+                            error!(%err, "display chan");
+                        };
+                        log_connetion_failure = false;
+                    }
+                }
             }
 
-            tokio::time::sleep(RECONNECT_TIMEOUT).await;
+            time::sleep(RECONNECT_TIMEOUT).await;
         }
     }
 
     async fn handler(&mut self, mut stream: UnixStream) -> Result<(), ChargePointError> {
         let mut buf = [0; 1024];
+        let mut last_checkpoint_instant = Instant::now();
+
         loop {
-            stream.readable().await?;
+            tokio::select! {
+                biased;
+                readable_rs = stream.readable() => {
+                    readable_rs?;
 
-            let n = stream.read(&mut buf).await?;
-            if n == 0 {
-                return Err(ChargePointError::SocketTerminated);
+                    let now = Instant::now();
+                    last_checkpoint_instant = now;
+
+                    let n = stream.read(&mut buf).await?;
+                    if n == 0 {
+                        return Err(ChargePointError::SocketTerminated);
+                    }
+
+                    let data = &buf[..n];
+                    trace!(%n, ?data, "read");
+                    let Ok(notif) = serde_json::from_slice::<ChargePointNotification>(data) else {
+                        warn!("error deserializing message");
+                        continue;
+                    };
+
+                    debug!(?notif);
+
+                    self.display_cmd_tx
+                        .send(DisplayCmd::ChargePoint {
+                            notification: notif,
+                            instant: now,
+                        })
+                        .await?;
+                }
+                _ = time::sleep(HEARTBEAT_TIMEOUT.saturating_sub(last_checkpoint_instant.elapsed())) => {
+                    warn!("heartbeat timeout");
+
+                    let now = Instant::now();
+                    last_checkpoint_instant = now;
+
+                    warn!("heartbeat timedout");
+
+                    self.display_cmd_tx
+                        .send(DisplayCmd::ChargePoint {
+                            notification: ChargePointNotification::MissingHeartBeat,
+                            instant: Instant::now(),
+                        })
+                        .await?;
+                }
             }
-
-            let data = &buf[..n];
-            trace!(%n, ?data, "read");
-            let Ok(state) = serde_json::from_slice::<ChargeState>(data) else {
-                warn!("error deserializing message");
-                continue;
-            };
-            debug!(?state);
-
-            self.display_cmd_tx
-                .send(DisplayCmd::ChargePoint {
-                    state,
-                    instant: Instant::now(),
-                })
-                .await?;
         }
     }
 }

@@ -2,13 +2,18 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
+use std::collections::VecDeque;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
 
-use raspdac_display::{ChargeProgress, ChargeState, UNIX_SOCKET_PATH};
+use raspdac_display::{ChargePointNotification, ChargeProgress, ChargeState, UNIX_SOCKET_PATH};
 
-async fn run(listener: UnixListener) -> io::Result<()> {
+async fn run(
+    listener: UnixListener,
+    mut msgs: Option<VecDeque<ChargePointNotification>>,
+) -> io::Result<()> {
     loop {
         let (stream, addr) = listener
             .accept()
@@ -17,51 +22,82 @@ async fn run(listener: UnixListener) -> io::Result<()> {
 
         info!(?addr, "accepted");
 
-        if let Err(err) = notifier(stream).await {
+        if let Err(err) = notifier(stream, &mut msgs).await {
             warn!(%err, "notifier");
         }
+
+        if msgs.as_mut().is_none_or(|m| m.is_empty()) {
+            break;
+        }
     }
+
+    Ok(())
 }
 
-async fn notifier(mut stream: UnixStream) -> Result<(), Box<dyn Error>> {
+async fn notifier(
+    mut stream: UnixStream,
+    msgs: &mut Option<VecDeque<ChargePointNotification>>,
+) -> Result<(), Box<dyn Error>> {
     let mut buf = vec![0; 1024];
-    stream.writable().await?;
 
-    let arg1 = std::env::args().nth(1);
-    let msg = match arg1.as_deref() {
-        Some("charging") | None => ChargeState::Charging(ChargeProgress {
-            soc: 30,
-            target_soc: 50,
-            seconds_left: 120,
-        }),
-        Some("sevse") => ChargeState::SuspendedEvse(ChargeProgress {
-            soc: 49,
-            target_soc: 50,
-            seconds_left: 0,
-        }),
-        Some("sev") => ChargeState::SuspendedEv,
-        Some("suser") => ChargeState::StoppedByUser,
-        Some("available") => ChargeState::Available,
-        Some("preparing") => ChargeState::Preparing,
-        Some("error") => ChargeState::Error,
-        Some(other) => panic!("unknown {other}"),
-    };
-    buf.clear();
-    serde_json::to_writer(&mut buf, &msg)?;
+    loop {
+        stream.writable().await?;
 
-    if let Err(err) = stream.write(buf.as_slice()).await {
-        warn!(%err, "writing to socket");
-        Err(err)?;
+        let Some(msgs) = msgs.as_mut() else {
+            info!("no msgs defined => just wait");
+            std::future::pending::<()>().await;
+            break;
+        };
+
+        buf.clear();
+        serde_json::to_writer(&mut buf, &msgs.pop_front())?;
+
+        if let Err(err) = stream.write(buf.as_slice()).await {
+            warn!(%err, "writing to socket");
+            Err(err)?;
+        }
+
+        debug!("written");
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        if msgs.is_empty() {
+            info!("no more messages => disconnecting");
+            break;
+        }
     }
-
-    debug!("written");
-    std::future::pending::<()>().await;
 
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let msgs = std::env::args().nth(1).map(|arg1| {
+        VecDeque::from_iter(arg1.split(',').map(|part| match part {
+            "charging" => ChargePointNotification::Charge(ChargeState::Charging(ChargeProgress {
+                soc: 30,
+                target_soc: 50,
+                seconds_left: 120,
+            })),
+            "sevse" => {
+                ChargePointNotification::Charge(ChargeState::SuspendedEvse(ChargeProgress {
+                    soc: 49,
+                    target_soc: 50,
+                    seconds_left: 0,
+                }))
+            }
+            "sev" => ChargePointNotification::Charge(ChargeState::SuspendedEv),
+            "suser" => ChargePointNotification::Charge(ChargeState::StoppedByUser),
+            "available" => ChargePointNotification::Charge(ChargeState::Available),
+            "preparing" => ChargePointNotification::Charge(ChargeState::Preparing),
+            "charge_error" => ChargePointNotification::Charge(ChargeState::Error),
+            "error" => ChargePointNotification::Error,
+            "heartbeat" => ChargePointNotification::HeartBeat,
+            "mheartbeat" => ChargePointNotification::MissingHeartBeat,
+            other => panic!("unknown {other}"),
+        }))
+    });
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -96,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener =
         UnixListener::bind(socket_path).inspect_err(|err| error!(%err, "binding socket"))?;
 
-    let listener_hdl = tokio::spawn(run(listener));
+    let listener_hdl = tokio::spawn(run(listener, msgs));
 
     info!("listener running");
     tokio::signal::ctrl_c().await?;

@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use crate::charge_point::ChargeState;
+use crate::charge_point::{ChargePointNotification, ChargeState};
 use crate::config::Config;
 use crate::{PlaybackState, PlayerData, PlayerNotification};
 
@@ -40,7 +40,7 @@ const CHARGING_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 pub enum DisplayCmd {
     Player(PlayerNotification),
     ChargePoint {
-        state: ChargeState,
+        notification: ChargePointNotification,
         instant: Instant,
     },
 }
@@ -77,8 +77,9 @@ pub struct Display {
     last_tick: Instant,
     player_state: PlaybackState,
     player_data: PlayerData,
-    charge_state: ChargeState,
-    charge_state_base_instant: Instant,
+    charge_point_notif: ChargePointNotification,
+    charge_point_notif_base_instant: Instant,
+    last_charge_state: Option<ChargeState>,
 }
 
 impl Display {
@@ -100,8 +101,9 @@ impl Display {
             last_tick: Instant::now(),
             player_state: PlaybackState::Stopped,
             player_data: Default::default(),
-            charge_state: ChargeState::Available,
-            charge_state_base_instant: Instant::now(),
+            charge_point_notif: ChargePointNotification::Charge(ChargeState::Available),
+            charge_point_notif_base_instant: Instant::now(),
+            last_charge_state: None,
         })
     }
 
@@ -116,12 +118,16 @@ impl Display {
                 self.update_line1 = true;
                 self.update_oled_in_player_state().await;
             }
-            (ChargePoint, _) if self.charge_state.is_charging() => {
+            (ChargePoint, _) if self.charge_point_notif.is_critical() => {
+                // just stay on until further notice
+                self.tick_timeout = None;
+            }
+            (ChargePoint, _) if self.charge_point_notif.is_charging() => {
                 self.update_oled_in_charge_point_state().await;
             }
             (ChargePoint, player_state) if player_state.is_playing() => {
                 info!(
-                    charge_state = %self.charge_state.name(),
+                    charge_state = %self.charge_point_notif.name(),
                     "switching back to player state",
                 );
                 self.switch_to_player_state(player_state);
@@ -154,9 +160,12 @@ impl Display {
                 self.player_data.base_position_us = position_us;
                 self.player_data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint { state, instant } => {
+            DisplayCmd::ChargePoint {
+                notification,
+                instant,
+            } => {
                 self.state = DisplayState::ChargePoint;
-                self.update_charge_point(state, instant).await;
+                self.update_charge_point(notification, instant).await;
             }
         }
     }
@@ -287,19 +296,19 @@ impl Display {
                 state: player_state,
                 data,
             }) => {
-                if !self.charge_state.is_charging()
-                    && !self.charge_state.is_error()
+                if !self.charge_point_notif.is_charging()
+                    && !self.charge_point_notif.is_critical()
                     && player_state.is_playing()
                     && !self.player_state.is_playing()
                 {
                     info!(
-                        charge_state = %self.charge_state.name(),
+                        charge_state = %self.charge_point_notif.name(),
                         "switching to Player state",
                     );
                     self.switch_to_player_state(player_state);
                 } else {
                     debug!(
-                        charge_state = %self.charge_state.name(),
+                        charge_state = %self.charge_point_notif.name(),
                         "updating (not displaying)",
                     );
                 }
@@ -314,38 +323,74 @@ impl Display {
                 self.player_data.base_position_us = position_us;
                 self.player_data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint { state, instant } => {
+            DisplayCmd::ChargePoint {
+                notification: state,
+                instant,
+            } => {
                 self.update_charge_point(state, instant).await;
             }
         }
     }
 
     /// Update internal state data
-    async fn update_charge_point(&mut self, charge_state: ChargeState, instant: Instant) {
-        info!(msg = ?charge_state, "charge point");
-
-        use ChargeState::*;
-        match charge_state {
-            Charging(_) => self.tick_timeout = Some(CHARGING_REFRESH_INTERVAL),
-            SuspendedEvse(_) | Error => self.tick_timeout = None,
-            _ => self.tick_timeout = Some(self.idle_timeout),
+    async fn update_charge_point(
+        &mut self,
+        notification: ChargePointNotification,
+        instant: Instant,
+    ) {
+        if notification.is_critical() {
+            warn!(?notification, "charge point");
+        } else {
+            info!(?notification, "charge point");
         }
 
-        self.charge_state = charge_state;
-        self.charge_state_base_instant = instant;
+        use ChargePointNotification::*;
+        match &notification {
+            Charge(charge_state) => {
+                match charge_state {
+                    ChargeState::Charging(_) => {
+                        self.tick_timeout = Some(CHARGING_REFRESH_INTERVAL);
+                    }
+                    ChargeState::SuspendedEvse(_) | ChargeState::Error => {
+                        self.tick_timeout = None;
+                    }
+                    _ => self.tick_timeout = Some(self.idle_timeout),
+                }
+
+                self.last_charge_state = Some(charge_state.clone());
+                self.charge_point_notif = notification;
+                self.charge_point_notif_base_instant = instant;
+            }
+            MissingHeartBeat | Error | ServerDisconnected => {
+                self.charge_point_notif = notification;
+                self.charge_point_notif_base_instant = instant;
+                self.tick_timeout = None;
+            }
+            HeartBeat => {
+                if self.charge_point_notif.is_error() {
+                    // still in error state
+                    return;
+                }
+
+                if let Some(charge_state) = self.last_charge_state.clone() {
+                    // recovered => restore last state
+                    self.charge_point_notif = ChargePointNotification::Charge(charge_state);
+                }
+            }
+        }
 
         self.update_oled_in_charge_point_state().await;
     }
 
     async fn update_oled_in_charge_point_state(&mut self) {
+        use ChargePointNotification::*;
         use ChargeState::*;
-        match &self.charge_state {
-            Charging(progress) | SuspendedEvse(progress) => {
-                self.tick_timeout = None;
+        match &self.charge_point_notif {
+            Charge(Charging(progress)) | Charge(SuspendedEvse(progress)) => {
                 self.oled
                     .write_line(
                         LineNb::One,
-                        if self.charge_state.is_charging() {
+                        if self.charge_point_notif.is_charging() {
                             "|> "
                         } else {
                             "|| "
@@ -358,10 +403,10 @@ impl Display {
                     )
                     .await;
 
-                let seconds_left = if self.charge_state.is_charging() {
-                    progress
-                        .seconds_left
-                        .saturating_sub(self.charge_state_base_instant.elapsed().as_secs() as u16)
+                let seconds_left = if self.charge_point_notif.is_charging() {
+                    progress.seconds_left.saturating_sub(
+                        self.charge_point_notif_base_instant.elapsed().as_secs() as u16,
+                    )
                 } else {
                     progress.seconds_left
                 };
@@ -375,17 +420,11 @@ impl Display {
                     .await;
             }
             _ => {
-                // show notification for a bit, except for error
-                self.tick_timeout = if self.charge_state.is_error() {
-                    None
-                } else {
-                    Some(self.idle_timeout)
-                };
                 self.oled
                     .write_line(LineNb::One, "⛶  Borne VE".chars())
                     .await;
                 self.oled
-                    .write_line(LineNb::Two, self.charge_state.name().chars())
+                    .write_line(LineNb::Two, self.charge_point_notif.name().chars())
                     .await;
             }
         }
@@ -418,7 +457,10 @@ impl Display {
                 self.player_data.base_position_us = position_us;
                 self.player_data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint { state, instant } => {
+            DisplayCmd::ChargePoint {
+                notification: state,
+                instant,
+            } => {
                 self.oled.clear_on().await;
                 self.state = DisplayState::ChargePoint;
                 self.update_charge_point(state, instant).await;

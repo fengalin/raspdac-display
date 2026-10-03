@@ -317,6 +317,7 @@ fn map_char(c: char) -> u8 {
         '¼' => 0xe3,
         '⅔' => 0xe4,
         '¾' => 0xe5,
+        'θ' => 0xf2,
         // TODO the last ones...
         '\0'..' ' => b' ',
         _ => b'?',
