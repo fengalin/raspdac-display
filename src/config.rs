@@ -1,13 +1,10 @@
 //! Configuration for the raspdac-display service.
 
-use std::time::Duration;
-
 /// Top-level configuration.
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub display: DisplayConfig,
     pub scroll: ScrollConfig,
-    pub idle: IdleConfig,
 }
 
 /// GPIO pin configuration for the HD44780 display.
@@ -48,30 +45,6 @@ impl Default for ScrollConfig {
         ScrollConfig {
             speed: 2.0,
             dwell_secs: 1.5,
-        }
-    }
-}
-
-/// Idle timer configuration.
-#[derive(Debug, Clone)]
-pub struct IdleConfig {
-    /// Seconds before clearing the display when no player is active.
-    pub timeout: Duration,
-}
-
-impl Default for IdleConfig {
-    fn default() -> Self {
-        let timeout = cfg_select! {
-            all(target_arch = "aarch64", target_os = "linux") => {
-                // expecting we target the raspberry pi
-                300
-            }
-            _ => {
-                5
-            }
-        };
-        IdleConfig {
-            timeout: Duration::from_secs(timeout),
         }
     }
 }
