@@ -4,7 +4,6 @@
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub display: DisplayConfig,
-    pub scroll: ScrollConfig,
 }
 
 /// GPIO pin configuration for the HD44780 display.
@@ -27,24 +26,6 @@ impl Default for DisplayConfig {
             d5: 24,
             d6: 23,
             d7: 27,
-        }
-    }
-}
-
-/// Scrolling configuration.
-#[derive(Debug, Clone)]
-pub struct ScrollConfig {
-    /// Scroll speed in cells per second (applied to both artist and title).
-    pub speed: f32,
-    /// Seconds to pause at each edge before reversing direction.
-    pub dwell_secs: f32,
-}
-
-impl Default for ScrollConfig {
-    fn default() -> Self {
-        ScrollConfig {
-            speed: 2.0,
-            dwell_secs: 1.5,
         }
     }
 }

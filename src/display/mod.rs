@@ -29,9 +29,6 @@ cfg_select! {
     }
 }
 
-mod scroll;
-use scroll::ScrollState;
-
 const IDLE_TICK_TIMEOUT: Duration = Duration::from_secs(cfg_select! {
     all(target_arch = "aarch64", target_os = "linux") => {
         // expecting we target the raspberry pi
@@ -130,7 +127,7 @@ pub struct Display {
     duration_str: String,
     update_line1: bool,
     update_line2: bool,
-    line2: RowDisplay,
+    line2: String,
     tick_timeout: Option<Duration>,
     last_tick: Instant,
     player: Player,
@@ -150,7 +147,7 @@ impl Display {
             duration_str: String::with_capacity(5),
             update_line1: false,
             update_line2: false,
-            line2: RowDisplay::new(config.scroll.speed, config.scroll.dwell_secs),
+            line2: String::with_capacity(DISPLAY_WIDTH),
             tick_timeout: None,
             last_tick: Instant::now(),
             player: Player {
@@ -171,8 +168,6 @@ impl Display {
         use PlaybackState::*;
         match (self.state, self.player.state) {
             (Player, Playing) => {
-                // let dt = self.last_tick.elaspsed().as_secs_f32();
-                // FIXME switch update_line2 depending on animation
                 self.update_line1 = true;
                 self.update_oled_in_player_state().await;
             }
@@ -281,24 +276,21 @@ impl Display {
             _ => (),
         }
 
-        let mut data_updated = self.player.data.base_position_us != data.base_position_us
+        let data_updated = self.player.data.base_position_us != data.base_position_us
             || self.player.data.base_position_instant != data.base_position_instant
             || self.player.data.duration_us != data.duration_us;
 
         self.update_line1 |= can_display && data_updated;
 
-        if self.player.data.title != data.title {
-            data_updated = true;
-
-            if can_display {
-                self.line2.set_text(data.title.as_ref());
-                self.update_line2 |= true;
-            }
-        }
-
         if data_updated {
             debug!(old = ?self.player.data, new = ?data, "data updated");
+
+            let title_updated = self.player.data.title != data.title;
             self.player.data = data;
+
+            if title_updated && can_display {
+                self.set_line2_with_player_title();
+            }
         }
 
         if can_display {
@@ -362,7 +354,7 @@ impl Display {
         }
         self.update_line2 = false;
 
-        oled.write_line(LineNb::Two, line2.full_text.chars()).await;
+        oled.write_line(LineNb::Two, line2.chars()).await;
     }
 }
 
@@ -633,8 +625,7 @@ impl Display {
         self.state = DisplayState::Player;
 
         self.update_line1 = true;
-        self.line2.set_text(self.player.data.title.as_ref());
-        self.update_line2 = true;
+        self.set_line2_with_player_title();
 
         self.set_tick_timeout(if new_player_state.is_playing() {
             PLAYING_REFRESH_INTERVAL
@@ -668,6 +659,14 @@ impl Display {
         self.update_oled_in_charge_point_state().await;
     }
 
+    fn set_line2_with_player_title(&mut self) {
+        self.line2.clear();
+        self.line2.push_str(
+            &self.player.data.title[..usize::min(self.player.data.title.len(), 1 + DISPLAY_WIDTH)],
+        );
+        self.update_line2 = true;
+    }
+
     async fn off(&mut self) {
         self.oled.off().await;
         self.state = DisplayState::Off;
@@ -677,59 +676,5 @@ impl Display {
     async fn quit(&mut self) {
         info!("quitting display task");
         self.oled.off().await;
-    }
-}
-
-/// A single displayable row with its scroll state.
-#[derive(Debug, PartialEq)]
-struct RowDisplay {
-    full_text: String,
-    scroll: Option<ScrollState>,
-}
-
-impl RowDisplay {
-    /// Sanitize and prepare a row. Empty text renders as blank.
-    #[expect(unused)]
-    fn new(speed: f32, dwell_secs: f32) -> Self {
-        // let mut sanitized = sanitize(text, DISPLAY_WIDTH * 3).into_bytes();
-        // let scroll = if sanitized.len() > DISPLAY_WIDTH {
-        // FIXME
-        // Some(ScrollState::new(
-        //     sanitized.clone(),
-        //     DISPLAY_WIDTH,
-        //     speed,
-        //     dwell_secs,
-        // ))
-        //     None
-        // } else {
-        //     None
-        // };
-        RowDisplay {
-            full_text: String::with_capacity(DISPLAY_WIDTH * 2),
-            scroll: None,
-        }
-    }
-
-    #[expect(unused)]
-    fn tick(&mut self, dt: f32) {
-        if let Some(ref mut scroll) = self.scroll {
-            scroll.tick(dt);
-        }
-    }
-
-    // FIXME and call from playing mode
-    // async fn render(&mut self, oled: &mut Hd44780, line_pos: u8) {
-    //     let content: Vec<u8> = if let Some(ref scroll) = self.scroll {
-    //         scroll.visible().to_vec()
-    //     } else {
-    //         self.sanitized.clone()
-    //     };
-    //     oled.write_row(line_pos, &content).await;
-    // }
-
-    fn set_text(&mut self, title: &str) {
-        self.full_text.clear();
-        self.full_text
-            .push_str(&title[..usize::min(title.len(), 1 + DISPLAY_WIDTH * 2)]);
     }
 }
