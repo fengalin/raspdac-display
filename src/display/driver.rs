@@ -4,10 +4,16 @@ use rpi_pal::gpio::{Gpio, Level, OutputPin};
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::config::DisplayConfig;
-
 /// Number of display cells per row.
 pub const DISPLAY_WIDTH: usize = 16;
+
+/// GPIO PINs
+const RS: u8 = 7;
+const EN: u8 = 8;
+const D4: u8 = 25;
+const D5: u8 = 24;
+const D6: u8 = 23;
+const D7: u8 = 27;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
@@ -64,16 +70,16 @@ pub struct Hd44780 {
 
 impl Hd44780 {
     /// Initialize the HD44780 display with the given pin numbers (BCM GPIO).
-    pub async fn new(config: &DisplayConfig) -> Result<Self, DriverError> {
+    pub async fn new() -> Result<Self, DriverError> {
         let gpio = Gpio::new()?;
 
         let mut display = Hd44780 {
-            rs: gpio.get(config.rs)?.into_output(),
-            en: gpio.get(config.en)?.into_output(),
-            d4: gpio.get(config.d4)?.into_output(),
-            d5: gpio.get(config.d5)?.into_output(),
-            d6: gpio.get(config.d6)?.into_output(),
-            d7: gpio.get(config.d7)?.into_output(),
+            rs: gpio.get(RS)?.into_output(),
+            en: gpio.get(EN)?.into_output(),
+            d4: gpio.get(D4)?.into_output(),
+            d5: gpio.get(D5)?.into_output(),
+            d6: gpio.get(D6)?.into_output(),
+            d7: gpio.get(D7)?.into_output(),
             last_len_line1: 0,
             last_len_line2: 0,
         };

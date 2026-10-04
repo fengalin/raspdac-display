@@ -4,9 +4,7 @@
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
-use raspdac_display::{
-    ChargePointListener, Display, MpdPlayer, MprisPlayer, PlayerAggregator, config,
-};
+use raspdac_display::{ChargePointListener, Display, MpdPlayer, MprisPlayer, PlayerAggregator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,12 +14,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let config = config::Config::default();
-
     let (stop_tx, stop_rx) = broadcast::channel(8);
 
     let (display_cmd_tx, display_cmd_rx) = mpsc::channel(8);
-    let display = Display::new(&config, display_cmd_rx).await?;
+    let display = Display::new(display_cmd_rx).await?;
 
     let (player_update_tx, player_update_rx) = mpsc::channel(8);
     let agg = PlayerAggregator::new(player_update_rx, display_cmd_tx.clone());

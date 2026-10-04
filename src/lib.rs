@@ -1,5 +1,3 @@
-pub mod config;
-
 mod display;
 pub use display::{DISPLAY_WIDTH, Display, Hd44780, LineNb};
 

@@ -1,4 +1,4 @@
-use raspdac_display::{Hd44780, LineNb, config};
+use raspdac_display::{Hd44780, LineNb};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let line1 = "|> line 1 test".to_string();
     let line2 = "|| line 2 test".to_string();
 
-    let mut oled = Hd44780::new(&config::DisplayConfig::default()).await?;
+    let mut oled = Hd44780::new().await?;
 
     oled.write_line(LineNb::One, line1.chars()).await;
     oled.write_line(LineNb::Two, line2.chars()).await;

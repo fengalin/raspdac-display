@@ -14,7 +14,6 @@ use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::charge_point::{ChargePointConnectionState, ChargePointNotification, ChargeState};
-use crate::config::Config;
 use crate::{PlaybackState, PlayerData, PlayerNotification};
 
 cfg_select! {
@@ -135,13 +134,10 @@ pub struct Display {
 }
 
 impl Display {
-    pub async fn new(
-        config: &Config,
-        cmd_rx: mpsc::Receiver<DisplayCmd>,
-    ) -> Result<Self, DriverError> {
+    pub async fn new(cmd_rx: mpsc::Receiver<DisplayCmd>) -> Result<Self, DriverError> {
         Ok(Display {
             cmd_rx,
-            oled: Hd44780::new(&config.display).await?,
+            oled: Hd44780::new().await?,
             state: DisplayState::Off,
             position_str: String::with_capacity(5),
             duration_str: String::with_capacity(5),

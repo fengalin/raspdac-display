@@ -2,8 +2,6 @@
 
 use tracing::info;
 
-use crate::config::DisplayConfig;
-
 #[path = "driver.rs"]
 #[allow(unused)]
 mod driver;
@@ -17,7 +15,7 @@ pub struct Hd44780 {
 }
 
 impl Hd44780 {
-    pub async fn new(_config: &DisplayConfig) -> Result<Self, DriverError> {
+    pub async fn new() -> Result<Self, DriverError> {
         Ok(Hd44780 {
             last_len_line1: 0,
             last_len_line2: 0,
