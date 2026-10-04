@@ -92,6 +92,9 @@ impl ChargePoint {
     fn is_ok_and_idle(&self) -> bool {
         !self.must_alert() && !self.charge_state.is_charging()
     }
+    fn is_significant(&self) -> bool {
+        self.must_alert() || self.charge_state.is_significant()
+    }
     fn clear_connection_alert(&mut self) -> bool {
         if self.connection_alert.take().is_some() {
             debug!(charge_state = ?self.charge_state, "cleared charge point alert");
@@ -101,6 +104,11 @@ impl ChargePoint {
         }
     }
     fn get_tick_timeout(&self) -> Option<Duration> {
+        if let Some(alert) = self.connection_alert {
+            debug_assert!(!alert.is_hearbeat());
+            return None;
+        }
+
         match self.charge_state {
             ChargeState::Charging(_) => Some(CHARGING_REFRESH_INTERVAL),
             ChargeState::SuspendedEvse(_) | ChargeState::Error => None,
@@ -182,7 +190,17 @@ impl Display {
                 );
                 self.switch_to_player_state(player_state);
             }
-            (Player, _) | (ChargePoint, _) => {
+            (ChargePoint, _) => {
+                info!("going blank due to inactivity");
+                self.off().await;
+                self.disable_tick();
+            }
+            (Player, _) => {
+                if self.charge_point.is_significant() {
+                    self.switch_back_to_charge_point_state().await;
+                    return;
+                }
+
                 info!("going blank due to inactivity");
                 self.off().await;
                 self.disable_tick();
@@ -201,7 +219,17 @@ impl Display {
             DisplayCmd::Player(PlayerNotification::Update {
                 state: player_state,
                 data,
-            }) => self.update_player(player_state, data).await,
+            }) => {
+                if player_state.is_stopped() && self.charge_point.is_significant() {
+                    self.switch_back_to_charge_point_state().await;
+                    debug!(
+                        charge_point_state = %self.charge_point.state_name(),
+                        "updating (not displaying)",
+                    );
+                }
+
+                self.update_player(player_state, data).await;
+            }
             DisplayCmd::Player(PlayerNotification::BasePosition {
                 position_us,
                 instant,
@@ -346,12 +374,19 @@ impl Display {
                 state: new_player_state,
                 data,
             }) => {
-                if self.charge_point.is_ok_and_idle()
-                    && new_player_state.is_playing()
-                    && !self.player.state.is_playing()
+                // only way to switch to player state from
+                // a charge point alert or a charging state
+                // is to get the player to play from the stopped state
+                // This ensures we don't switch to player state
+                // when changing track, which can trigger
+                // playing -> paused -> playing.
+                if new_player_state.is_playing()
+                    && (self.player.state.is_stopped()
+                        || self.charge_point.is_ok_and_idle() && !self.player.state.is_playing())
                 {
                     info!(
                         charge_point_state = %self.charge_point.state_name(),
+                        old_player_state = ?self.player.state,
                         "switching to Player state",
                     );
                     self.switch_to_player_state(new_player_state);
@@ -470,8 +505,12 @@ impl Display {
                     .await;
             }
             other => {
+                let symbol = if other.is_error() { '×' } else { '⛶' };
                 self.oled
-                    .write_line(LineNb::One, "×  Borne VE".chars())
+                    .write_line(
+                        LineNb::One,
+                        std::iter::once(symbol).chain("  Borne VE".chars()),
+                    )
                     .await;
                 self.oled
                     .write_line(LineNb::Two, other.name().chars())
@@ -602,6 +641,31 @@ impl Display {
         } else {
             IDLE_TICK_TIMEOUT
         });
+    }
+
+    async fn switch_back_to_charge_point_state(&mut self) {
+        debug!(
+            charge_point_state = %self.charge_point.state_name(),
+            "switching back to charge point state",
+        );
+
+        self.state = DisplayState::ChargePoint;
+
+        self.update_line1 = true;
+        self.update_line2 = true;
+
+        // This is different from the regular charge point timeouts
+        // since user explicitely went to Player stopped, then playing again,
+        // discarding the charge point state / alert.
+        // Let's just display display the charge point state / alert until
+        // timeout, except if a charge is in progress.
+        self.set_tick_timeout(Some(if self.charge_point.charge_state.is_charging() {
+            CHARGING_REFRESH_INTERVAL
+        } else {
+            IDLE_TICK_TIMEOUT
+        }));
+
+        self.update_oled_in_charge_point_state().await;
     }
 
     async fn off(&mut self) {

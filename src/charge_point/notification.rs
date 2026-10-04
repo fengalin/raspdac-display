@@ -15,25 +15,12 @@ impl ChargePointNotification {
         }
     }
 
-    pub fn is_error(&self) -> bool {
-        matches!(
-            self,
-            ChargePointNotification::Connection(ChargePointConnectionState::Error)
-                | ChargePointNotification::Charge(ChargeState::Error)
-        )
-    }
     pub fn is_critical(&self) -> bool {
         matches!(
             self,
             ChargePointNotification::Charge(ChargeState::Error)
                 | ChargePointNotification::Connection(ChargePointConnectionState::Error)
                 | ChargePointNotification::Connection(ChargePointConnectionState::MissedHeartbeat)
-        )
-    }
-    pub fn is_charging(&self) -> bool {
-        matches!(
-            self,
-            ChargePointNotification::Charge(ChargeState::Charging(_))
         )
     }
 }
@@ -77,9 +64,20 @@ impl ChargeState {
     pub fn is_charging(&self) -> bool {
         matches!(self, Self::Charging(_))
     }
-
     pub fn is_error(&self) -> bool {
         matches!(self, Self::Error)
+    }
+    pub fn is_significant(&self) -> bool {
+        matches!(
+            self,
+            ChargeState::Charging(_)
+                | ChargeState::SuspendedEvse(_)
+                | ChargeState::SuspendedEv
+                | ChargeState::StoppedByUser
+                | ChargeState::Finishing
+                | ChargeState::UnknownSession
+                | ChargeState::Error
+        )
     }
 }
 

@@ -65,8 +65,8 @@ async fn notifier(
         tokio::time::sleep(Duration::from_secs(5)).await;
 
         if msgs.is_empty() {
-            info!("no more messages => disconnecting");
-            break;
+            info!("no more messages => waiting for SIGINT");
+            std::future::pending::<()>().await;
         }
     }
 
@@ -139,7 +139,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener =
         UnixListener::bind(socket_path).inspect_err(|err| error!(%err, "binding socket"))?;
 
-    run(listener, msgs).await?;
+    let listener_hdl = tokio::spawn(run(listener, msgs));
+
+    info!("listener running");
+    tokio::signal::ctrl_c().await?;
+
+    listener_hdl.abort();
 
     Ok(())
 }
