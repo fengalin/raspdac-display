@@ -167,32 +167,32 @@ impl Display {
                 self.update_line1 = true;
                 self.update_oled_in_player_state().await;
             }
-            (ChargePoint, _) if self.charge_point.must_alert() => {
-                // just stay on until further notice
-                self.disable_tick();
-            }
             (ChargePoint, _) if self.charge_point.charge_state.is_charging() => {
                 self.update_oled_in_charge_point_state().await;
             }
             (ChargePoint, player_state) if player_state.is_playing() => {
                 info!(
                     charge_point_state = %self.charge_point.state_name(),
-                    "switching back to player state",
+                    "charge point timeout, player is playing => switching back to player state",
                 );
                 self.switch_to_player_state(player_state);
             }
             (ChargePoint, _) => {
-                info!("going blank due to inactivity");
+                info!("charge point timeout, going blank due to inactivity");
                 self.off().await;
                 self.disable_tick();
             }
             (Player, _) => {
                 if self.charge_point.is_significant() {
+                    info!(
+                        charge_point_state = %self.charge_point.state_name(),
+                        "player timeout => switching back to charge point state",
+                    );
                     self.switch_back_to_charge_point_state().await;
                     return;
                 }
 
-                info!("going blank due to inactivity");
+                info!("player timeout => going blank due to inactivity");
                 self.off().await;
                 self.disable_tick();
             }
