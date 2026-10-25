@@ -1,10 +1,7 @@
-# pidisplay — MPRIS media player display (Winstar HD44780-compatible OLED)
-#
-# GPIO access: the user must be in the `gpio` group
-#   sudo usermod -aG gpio $USER   (re-login afterwards)
+# raspdac-display — Media player and Charge System display (Winstar HD44780-compatible OLED) service
 
 [Unit]
-Description=MPRIS media player display (Winstar OLED) for RaspDAC
+Description=Media player and Charge System display (Winstar OLED) for RaspDAC
 After=dbus.service
 
 [Service]

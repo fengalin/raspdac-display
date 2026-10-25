@@ -157,7 +157,7 @@ impl Hd44780 {
             sleep(Duration::from_micros(40)).await;
         }
 
-        // overide remaining characters from previous line, if any
+        // override remaining characters from previous line, if any
         let last_len = match line {
             LineNb::One => self.last_len_line1,
             LineNb::Two => self.last_len_line2,

@@ -46,8 +46,8 @@ impl Hd44780 {
         };
 
         let text = data.take(DISPLAY_WIDTH).collect::<String>();
-        let overide = last_len.checked_sub(text.len() as u8);
+        let _override = last_len.checked_sub(text.len() as u8);
 
-        info!(%line, %text, ?overide);
+        info!(%line, %text, ?_override);
     }
 }

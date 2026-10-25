@@ -1,4 +1,4 @@
-//! RaspDAC Display Service: monitors MPD, an MPRIS player & charge point (via ocpp-sever)
+//! RaspDAC Display Service: monitors MPD, an MPRIS player & charge point (via ocpp-server)
 //! and drives a Winstar 2x16 HD44780-compatible OLED display.
 
 use tokio::sync::{broadcast, mpsc};

@@ -101,7 +101,7 @@ impl ChargePoint {
     }
     fn get_tick_timeout(&self) -> Option<Duration> {
         if let Some(alert) = self.connection_alert {
-            debug_assert!(!alert.is_hearbeat());
+            debug_assert!(!alert.is_heartbeat());
             return None;
         }
 
@@ -448,7 +448,7 @@ impl Display {
 
     async fn update_oled_in_charge_point_state(&mut self) {
         if let Some(alert) = self.charge_point.connection_alert {
-            debug_assert!(!alert.is_hearbeat());
+            debug_assert!(!alert.is_heartbeat());
 
             self.oled
                 .write_line(LineNb::One, "×  serveur OCPP".chars())
@@ -645,9 +645,9 @@ impl Display {
         self.update_line2 = true;
 
         // This is different from the regular charge point timeouts
-        // since user explicitely went to Player stopped, then playing again,
+        // since user explicitly went to Player stopped, then playing again,
         // discarding the charge point state / alert.
-        // Let's just display display the charge point state / alert until
+        // Let's just display the charge point state / alert until
         // timeout, except if a charge is in progress.
         self.set_tick_timeout(Some(if self.charge_point.charge_state.is_charging() {
             CHARGING_REFRESH_INTERVAL
@@ -745,7 +745,7 @@ impl ChargePointConnectionState {
         }
     }
 
-    pub fn is_hearbeat(&self) -> bool {
+    pub fn is_heartbeat(&self) -> bool {
         matches!(self, ChargePointConnectionState::Heartbeat)
     }
     pub fn is_alert(&self) -> bool {

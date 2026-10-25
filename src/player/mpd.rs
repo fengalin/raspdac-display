@@ -73,7 +73,7 @@ impl MpdPlayer {
                 Ok(stream) => {
                     log_connetion_failure = true;
                     match self.listen(stream).await {
-                        Ok(()) => info!("left the socket"),
+                        Ok(()) => info!("socket disconnected"),
                         Err(err) => warn!(%err, "listener"),
                     }
                 }

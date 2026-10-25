@@ -57,18 +57,18 @@ impl ChargePointListener {
 
     async fn listen(&mut self) {
         let socket_path = Path::new(UNIX_SOCKET_PATH);
-        let mut log_connetion_failure = true;
+        let mut log_connection_failure = true;
         loop {
             match UnixStream::connect(&socket_path).await {
                 Ok(stream) => {
                     info!("connected");
-                    log_connetion_failure = true;
+                    log_connection_failure = true;
                     if let Err(err) = self.handler(stream).await {
                         warn!(%err, "handler");
                     }
                 }
                 Err(err) => {
-                    if log_connetion_failure {
+                    if log_connection_failure {
                         warn!(%err, socket = ?socket_path, "connecting");
                         if let Err(err) = self
                             .display_cmd_tx
@@ -82,7 +82,7 @@ impl ChargePointListener {
                         {
                             error!(%err, "display chan");
                         };
-                        log_connetion_failure = false;
+                        log_connection_failure = false;
                     }
                 }
             }
@@ -130,8 +130,6 @@ impl ChargePointListener {
 
                     let now = Instant::now();
                     last_checkpoint_instant = now;
-
-                    warn!("heartbeat timedout");
 
                     self.display_cmd_tx
                         .send(DisplayCmd::ChargePoint {
