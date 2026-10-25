@@ -438,6 +438,9 @@ impl Display {
                 self.charge_point.connection_alert = Some(alert);
                 self.disable_tick();
             }
+            MeterValues(_) => {
+                return;
+            }
         }
 
         self.update_oled_in_charge_point_state().await;
@@ -681,6 +684,7 @@ impl ChargePointNotification {
         match self {
             Charge(charge_state) => charge_state.name(),
             Connection(connection) => connection.name(),
+            MeterValues(_) => "mesures",
         }
     }
 
