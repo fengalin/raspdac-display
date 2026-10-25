@@ -134,7 +134,7 @@ impl ChargePointListener {
                     self.display_cmd_tx
                         .send(DisplayCmd::ChargePoint {
                             notification: ChargePointNotification::Connection(ChargePointConnectionState::MissedHeartbeat),
-                            instant: Instant::now(),
+                            instant: now,
                         })
                         .await?;
                 }

@@ -32,6 +32,7 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 [profile.release-slim]
 inherits = "release"
 strip = "symbols"
+opt-level = "s"
 lto = "fat"
 panic = "abort"
 codegen-units = 1

@@ -413,7 +413,7 @@ impl Display {
         if notification.is_critical() {
             warn!(?notification, "charge point");
         } else {
-            info!(?notification, "charge point");
+            debug!(?notification, "charge point");
         }
 
         use ChargePointConnectionState::*;
@@ -661,7 +661,8 @@ impl Display {
     fn set_line2_with_player_title(&mut self) {
         self.line2.clear();
         self.line2.push_str(
-            &self.player.data.title[..usize::min(self.player.data.title.len(), 1 + DISPLAY_WIDTH)],
+            &self.player.data.title
+                [..usize::min(self.player.data.title.chars().count(), 1 + DISPLAY_WIDTH)],
         );
         self.update_line2 = true;
     }

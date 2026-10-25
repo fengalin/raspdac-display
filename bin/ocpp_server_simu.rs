@@ -18,12 +18,12 @@ async fn run(
     mut msgs: Option<VecDeque<ChargePointNotification>>,
 ) -> io::Result<()> {
     loop {
-        let (stream, addr) = listener
+        let (stream, _) = listener
             .accept()
             .await
-            .inspect_err(|err| error!(%err, "connecting socket"))?;
+            .inspect_err(|err| error!(%err, "accepting socket"))?;
 
-        info!(?addr, "accepted");
+        info!("accepted");
 
         if let Err(err) = notifier(stream, &mut msgs).await {
             warn!(%err, "notifier");
