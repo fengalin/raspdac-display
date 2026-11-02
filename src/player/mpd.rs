@@ -73,7 +73,7 @@ impl MpdPlayer {
                 Ok(stream) => {
                     log_connetion_failure = true;
                     match self.listen(stream).await {
-                        Ok(()) => info!("socket disconnected"),
+                        Ok(()) => info!("left the socket"),
                         Err(err) => warn!(%err, "listener"),
                     }
                 }
@@ -137,7 +137,7 @@ impl MpdPlayer {
                             .send(NamedPlayerNotification {
                                 player_name: PLAYER_NAME,
                                 notif: PlayerNotification::BasePosition {
-                                    position_us: self.data.base_position_us,
+                                    position_s: self.data.base_position_s,
                                     instant: self.data.base_position_instant,
                                 }
                             })
@@ -200,12 +200,12 @@ impl MpdPlayer {
             self.state = state;
         }
 
-        self.data.base_position_us = status.elapsed.map_or(0, |t| t.as_micros() as u64);
+        self.data.base_position_s = status.elapsed.map_or(0, |t| t.as_secs() as u16);
         self.data.base_position_instant = now;
 
-        debug!(position = %self.data.base_position_us, "sampled");
+        debug!(position = %self.data.base_position_s, "sampled");
 
-        self.data.duration_us = status.duration.map_or(0, |t| t.as_micros() as u64);
+        self.data.duration_s = status.duration.map_or(0, |t| t.as_secs() as u16);
 
         Ok(())
     }

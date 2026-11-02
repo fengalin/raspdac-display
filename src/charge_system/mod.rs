@@ -10,8 +10,13 @@ use std::time::{Duration, Instant};
 
 use crate::display::DisplayCmd;
 
-mod notification;
-pub use notification::*;
+pub use charge_system_common::{
+    bms::Bms,
+    notification::{
+        ChargePointConnectionState, ChargeProgress, ChargeStatus, Notification, UNIX_SOCKET_PATH,
+    },
+    plan_model::{AppliedChargingPlan, ChargingPlan},
+};
 
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_mins(cfg_select! {
@@ -21,7 +26,7 @@ const HEARTBEAT_TIMEOUT: Duration = Duration::from_mins(cfg_select! {
     _ => 1,
 });
 
-const MAX_MESSAGE_SIZE: usize = 128;
+const MAX_MESSAGE_SIZE: usize = 512;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChargePointError {
@@ -36,13 +41,13 @@ pub enum ChargePointError {
 }
 
 #[derive(Debug)]
-pub struct ChargePointListener {
+pub struct ChargeSystemListener {
     display_cmd_tx: mpsc::Sender<DisplayCmd>,
 }
 
-impl ChargePointListener {
+impl ChargeSystemListener {
     pub fn new(display_cmd_tx: mpsc::Sender<DisplayCmd>) -> Self {
-        ChargePointListener { display_cmd_tx }
+        ChargeSystemListener { display_cmd_tx }
     }
 
     pub async fn into_task(mut self, mut stop_rx: broadcast::Receiver<()>) {
@@ -72,8 +77,8 @@ impl ChargePointListener {
                         warn!(%err, socket = ?socket_path, "connecting");
                         if let Err(err) = self
                             .display_cmd_tx
-                            .send(DisplayCmd::ChargePoint {
-                                notification: ChargePointNotification::Connection(
+                            .send(DisplayCmd::ChargeSystem {
+                                notification: Notification::Connection(
                                     ChargePointConnectionState::ServerDisconnected,
                                 ),
                                 instant: Instant::now(),
@@ -111,15 +116,24 @@ impl ChargePointListener {
 
                     let data = &buf[..n];
                     trace!(%n, ?data, "read");
-                    let Ok(notif) = serde_json::from_slice::<ChargePointNotification>(data) else {
-                        warn!("error deserializing message");
+                    let Ok(notif) = serde_json::from_slice::<Notification>(data).inspect_err(|err| {
+                        warn!(%err, "error deserializing message");
+                    }) else {
                         continue;
                     };
 
                     debug!(?notif);
 
+                    // filter which notification we are interested in
+                    match &notif {
+                        Notification::BmsUpdate(_) |
+                        Notification::Connection(_) |
+                        Notification::Status(_) => (),
+                        _ => continue,
+                    }
+
                     self.display_cmd_tx
-                        .send(DisplayCmd::ChargePoint {
+                        .send(DisplayCmd::ChargeSystem {
                             notification: notif,
                             instant: now,
                         })
@@ -132,8 +146,8 @@ impl ChargePointListener {
                     last_checkpoint_instant = now;
 
                     self.display_cmd_tx
-                        .send(DisplayCmd::ChargePoint {
-                            notification: ChargePointNotification::Connection(ChargePointConnectionState::MissedHeartbeat),
+                        .send(DisplayCmd::ChargeSystem {
+                            notification: Notification::Connection(ChargePointConnectionState::MissedHeartbeat),
                             instant: now,
                         })
                         .await?;
