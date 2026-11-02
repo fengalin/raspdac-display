@@ -8,15 +8,11 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use raspdac_display::{
-    ChargePointConnectionState, ChargePointNotification, ChargeProgress, ChargeState,
-    UNIX_SOCKET_PATH,
+use raspdac_display::charge_system::{
+    Bms, ChargePointConnectionState, ChargeProgress, ChargeStatus, Notification, UNIX_SOCKET_PATH,
 };
 
-async fn run(
-    listener: UnixListener,
-    mut msgs: Option<VecDeque<ChargePointNotification>>,
-) -> io::Result<()> {
+async fn run(listener: UnixListener, mut msgs: Option<VecDeque<Notification>>) -> io::Result<()> {
     loop {
         let (stream, _) = listener
             .accept()
@@ -39,7 +35,7 @@ async fn run(
 
 async fn notifier(
     mut stream: UnixStream,
-    msgs: &mut Option<VecDeque<ChargePointNotification>>,
+    msgs: &mut Option<VecDeque<Notification>>,
 ) -> Result<(), Box<dyn Error>> {
     let mut buf = vec![0; 1024];
 
@@ -52,8 +48,11 @@ async fn notifier(
             break;
         };
 
+        let msg = msgs.pop_front();
+        info!(?msg);
+
         buf.clear();
-        serde_json::to_writer(&mut buf, &msgs.pop_front())?;
+        serde_json::to_writer(&mut buf, &msg)?;
 
         if let Err(err) = stream.write(buf.as_slice()).await {
             warn!(%err, "writing to socket");
@@ -77,30 +76,31 @@ async fn notifier(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let msgs = std::env::args().nth(1).map(|arg1| {
         VecDeque::from_iter(arg1.split(',').map(|part| match part {
-            "charging" => ChargePointNotification::Charge(ChargeState::Charging(ChargeProgress {
-                soc: 30,
-                target_soc: 50,
-                seconds_left: 120,
+            "bms_update" => Notification::BmsUpdate(Bms::builder(48_100).target_soc(0.50).build()),
+            "charging" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
+                soc: 0.30,
+                remaining_time: 120,
             })),
-            "sevse" => {
-                ChargePointNotification::Charge(ChargeState::SuspendedEvse(ChargeProgress {
-                    soc: 49,
-                    target_soc: 50,
-                    seconds_left: 0,
-                }))
-            }
-            "sev" => ChargePointNotification::Charge(ChargeState::SuspendedEv),
-            "suser" => ChargePointNotification::Charge(ChargeState::StoppedByUser),
-            "available" => ChargePointNotification::Charge(ChargeState::Available),
-            "preparing" => ChargePointNotification::Charge(ChargeState::Preparing),
-            "charge_error" => ChargePointNotification::Charge(ChargeState::Error),
-            "error" => ChargePointNotification::Connection(ChargePointConnectionState::Error),
-            "heartbeat" => {
-                ChargePointNotification::Connection(ChargePointConnectionState::Heartbeat)
-            }
-            "mheartbeat" => {
-                ChargePointNotification::Connection(ChargePointConnectionState::MissedHeartbeat)
-            }
+            "charging2" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
+                soc: 0.306,
+                remaining_time: 110,
+            })),
+            "charging3" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
+                soc: 0.311,
+                remaining_time: 100,
+            })),
+            "sevse" => Notification::Status(ChargeStatus::SuspendedEvse(ChargeProgress {
+                soc: 0.49,
+                remaining_time: 0,
+            })),
+            "sev" => Notification::Status(ChargeStatus::SuspendedEv),
+            "suser" => Notification::Status(ChargeStatus::StoppedByUser),
+            "available" => Notification::Status(ChargeStatus::Available),
+            "preparing" => Notification::Status(ChargeStatus::Preparing),
+            "charge_error" => Notification::Status(ChargeStatus::Error),
+            "error" => Notification::Connection(ChargePointConnectionState::Error),
+            "heartbeat" => Notification::Connection(ChargePointConnectionState::Heartbeat),
+            "mheartbeat" => Notification::Connection(ChargePointConnectionState::MissedHeartbeat),
             other => panic!("unknown {other}"),
         }))
     });

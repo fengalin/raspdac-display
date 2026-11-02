@@ -4,7 +4,7 @@
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
-use raspdac_display::{ChargePointListener, Display, MpdPlayer, MprisPlayer, PlayerAggregator};
+use raspdac_display::{ChargeSystemListener, Display, MpdPlayer, PibuzPlayer, PlayerAggregator};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,20 +21,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (player_update_tx, player_update_rx) = mpsc::channel(8);
     let agg = PlayerAggregator::new(player_update_rx, display_cmd_tx.clone());
-    let pibuz = MprisPlayer::new("pibuz", player_update_tx.clone());
+    let pibuz = PibuzPlayer::new("pibuz", player_update_tx.clone());
     let mpd = MpdPlayer::new(player_update_tx);
+    let charge_system_listener = ChargeSystemListener::new(display_cmd_tx);
 
-    let mut task_handles = vec![
+    let task_handles = [
         tokio::spawn(display.into_task(stop_rx)),
         tokio::spawn(agg.into_task(stop_tx.subscribe())),
         tokio::spawn(pibuz.into_task(stop_tx.subscribe())),
         tokio::spawn(mpd.into_task(stop_tx.subscribe())),
+        tokio::spawn(charge_system_listener.into_task(stop_tx.subscribe())),
     ];
-
-    let charge_point_listener = ChargePointListener::new(display_cmd_tx);
-    task_handles.push(tokio::spawn(
-        charge_point_listener.into_task(stop_tx.subscribe()),
-    ));
 
     info!("RaspDAC Display Service started");
     tokio::signal::ctrl_c().await?;

@@ -4,7 +4,7 @@
 //!
 //! * Off: display is blank
 //! * Player: displaying current song
-//! * Charge Point: displaying charge point status
+//! * Charge System: displaying charge system status
 
 use std::fmt::Write;
 use std::time::{Duration, Instant};
@@ -13,7 +13,10 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tracing::{debug, info, warn};
 
-use crate::charge_point::{ChargePointConnectionState, ChargePointNotification, ChargeState};
+use crate::charge_system::{
+    self, AppliedChargingPlan, ChargePointConnectionState, ChargeStatus,
+    Notification as ChargeSystemNotification,
+};
 use crate::{PlaybackState, PlayerData, PlayerNotification};
 
 cfg_select! {
@@ -45,21 +48,21 @@ const CHARGING_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 pub enum DisplayCmd {
     Player(PlayerNotification),
-    ChargePoint {
-        notification: ChargePointNotification,
+    ChargeSystem {
+        notification: ChargeSystemNotification,
         instant: Instant,
     },
 }
 
-/// Display state as reported by the MPRIS aggregator or Charge Point listener.
+/// Display state as reported by the MPRIS aggregator or Charge System listener.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DisplayState {
     /// Display is off.
     Off,
     /// Displaying Player data.
     Player,
-    /// Displaying Charge Point data.
-    ChargePoint,
+    /// Displaying Charge System data.
+    ChargeSystem,
 }
 
 impl DisplayState {
@@ -75,25 +78,26 @@ struct Player {
 }
 
 #[derive(Debug)]
-struct ChargePoint {
-    charge_state: ChargeState,
+struct ChargeSystem {
+    charge_status: ChargeStatus,
+    target_soc: Option<u8>,
     update_base_instant: Instant,
     connection_alert: Option<ChargePointConnectionState>,
 }
 
-impl ChargePoint {
+impl ChargeSystem {
     fn must_alert(&self) -> bool {
-        self.connection_alert.is_some_and(|a| a.is_alert()) || self.charge_state.is_error()
+        self.connection_alert.is_some_and(|a| a.is_alert()) || self.charge_status.is_error()
     }
     fn is_ok_and_idle(&self) -> bool {
-        !self.must_alert() && !self.charge_state.is_charging()
+        !self.must_alert() && !self.charge_status.is_charging()
     }
     fn is_significant(&self) -> bool {
-        self.must_alert() || self.charge_state.is_significant()
+        self.must_alert() || self.charge_status.is_significant()
     }
     fn clear_connection_alert(&mut self) -> bool {
         if self.connection_alert.take().is_some() {
-            debug!(charge_state = ?self.charge_state, "cleared charge point alert");
+            debug!(charge_state = ?self.charge_status, "cleared charge system alert");
             true
         } else {
             false
@@ -105,15 +109,15 @@ impl ChargePoint {
             return None;
         }
 
-        match self.charge_state {
-            ChargeState::Charging(_) => Some(CHARGING_REFRESH_INTERVAL),
-            ChargeState::SuspendedEvse(_) | ChargeState::Error => None,
+        match self.charge_status {
+            ChargeStatus::Charging(_) => Some(CHARGING_REFRESH_INTERVAL),
+            ChargeStatus::SuspendedEvse(_) | ChargeStatus::Error => None,
             _ => Some(IDLE_TICK_TIMEOUT),
         }
     }
     fn state_name(&self) -> &'static str {
         self.connection_alert
-            .map_or_else(|| self.charge_state.name(), |a| a.name())
+            .map_or_else(|| self.charge_status.name(), |a| a.name())
     }
 }
 
@@ -130,7 +134,7 @@ pub struct Display {
     tick_timeout: Option<Duration>,
     last_tick: Instant,
     player: Player,
-    charge_point: ChargePoint,
+    charge_system: ChargeSystem,
 }
 
 impl Display {
@@ -150,8 +154,9 @@ impl Display {
                 state: PlaybackState::Stopped,
                 data: Default::default(),
             },
-            charge_point: ChargePoint {
-                charge_state: ChargeState::Available,
+            charge_system: ChargeSystem {
+                charge_status: ChargeStatus::Available,
+                target_soc: None,
                 update_base_instant: Instant::now(),
                 connection_alert: None,
             },
@@ -167,28 +172,28 @@ impl Display {
                 self.update_line1 = true;
                 self.update_oled_in_player_state().await;
             }
-            (ChargePoint, _) if self.charge_point.charge_state.is_charging() => {
-                self.update_oled_in_charge_point_state().await;
+            (ChargeSystem, _) if self.charge_system.charge_status.is_charging() => {
+                self.update_oled_in_charge_system_state().await;
             }
-            (ChargePoint, player_state) if player_state.is_playing() => {
+            (ChargeSystem, player_state) if player_state.is_playing() => {
                 info!(
-                    charge_point_state = %self.charge_point.state_name(),
-                    "charge point timeout, player is playing => switching back to player state",
+                    charge_system_state = %self.charge_system.state_name(),
+                    "charge system timeout, player is playing => switching back to player state",
                 );
                 self.switch_to_player_state(player_state);
             }
-            (ChargePoint, _) => {
-                info!("charge point timeout, going blank due to inactivity");
+            (ChargeSystem, _) => {
+                info!("charge system timeout, going blank due to inactivity");
                 self.off().await;
                 self.disable_tick();
             }
             (Player, _) => {
-                if self.charge_point.is_significant() {
+                if self.charge_system.is_significant() {
                     info!(
-                        charge_point_state = %self.charge_point.state_name(),
-                        "player timeout => switching back to charge point state",
+                        charge_system_state = %self.charge_system.state_name(),
+                        "player timeout => switching back to charge system state",
                     );
-                    self.switch_back_to_charge_point_state().await;
+                    self.switch_back_to_charge_system_state().await;
                     return;
                 }
 
@@ -211,10 +216,10 @@ impl Display {
                 state: player_state,
                 data,
             }) => {
-                if player_state.is_stopped() && self.charge_point.is_significant() {
-                    self.switch_back_to_charge_point_state().await;
+                if player_state.is_stopped() && self.charge_system.is_significant() {
+                    self.switch_back_to_charge_system_state().await;
                     debug!(
-                        charge_point_state = %self.charge_point.state_name(),
+                        charge_system_state = %self.charge_system.state_name(),
                         "updating (not displaying)",
                     );
                 }
@@ -222,19 +227,18 @@ impl Display {
                 self.update_player(player_state, data).await;
             }
             DisplayCmd::Player(PlayerNotification::BasePosition {
-                position_us,
+                position_s,
                 instant,
             }) => {
-                debug!(base_pos_us = %position_us, state = ?self.state, "update");
-                self.player.data.base_position_us = position_us;
+                debug!(base_pos_s = %position_s, state = ?self.state, "update");
+                self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint {
+            DisplayCmd::ChargeSystem {
                 notification,
                 instant,
             } => {
-                self.state = DisplayState::ChargePoint;
-                self.update_charge_point(notification, instant).await;
+                self.update_charge_system(notification, instant).await;
             }
         }
     }
@@ -272,9 +276,9 @@ impl Display {
             _ => (),
         }
 
-        let data_updated = self.player.data.base_position_us != data.base_position_us
+        let data_updated = self.player.data.base_position_s != data.base_position_s
             || self.player.data.base_position_instant != data.base_position_instant
-            || self.player.data.duration_us != data.duration_us;
+            || self.player.data.duration_s != data.duration_s;
 
         self.update_line1 |= can_display && data_updated;
 
@@ -295,8 +299,7 @@ impl Display {
     }
 
     async fn update_oled_in_player_state(&mut self) {
-        fn format_time(time_str: &mut String, usecs: u64) {
-            let total_secs = (usecs + 500_000) / 1_000_000;
+        fn format_time(time_str: &mut String, total_secs: u16) {
             let minutes = total_secs / 60;
             let seconds = total_secs % 60;
             time_str.clear();
@@ -318,11 +321,11 @@ impl Display {
             self.update_line1 = false;
             format_time(
                 position_str,
-                player.data.base_position_us
-                    + player.data.base_position_instant.elapsed().as_micros() as u64,
+                player.data.base_position_s
+                    + player.data.base_position_instant.elapsed().as_secs() as u16,
             );
             // might want to skip if duration did not change
-            format_time(duration_str, player.data.duration_us);
+            format_time(duration_str, player.data.duration_s);
 
             let state_prefix = match player.state {
                 PlaybackState::Playing => "|> ",
@@ -354,33 +357,33 @@ impl Display {
     }
 }
 
-/// ChargePoint specific
+/// ChargeSystem specific
 impl Display {
-    async fn on_command_in_charge_point_state(&mut self, cmd: DisplayCmd) {
+    async fn on_command_in_charge_system_state(&mut self, cmd: DisplayCmd) {
         match cmd {
             DisplayCmd::Player(PlayerNotification::Update {
                 state: new_player_state,
                 data,
             }) => {
                 // only way to switch to player state from
-                // a charge point alert or a charging state
+                // a charge system alert or a charging state
                 // is to get the player to play from the stopped state
                 // This ensures we don't switch to player state
                 // when changing track, which can trigger
                 // playing -> paused -> playing.
                 if new_player_state.is_playing()
                     && (self.player.state.is_stopped()
-                        || self.charge_point.is_ok_and_idle() && !self.player.state.is_playing())
+                        || self.charge_system.is_ok_and_idle() && !self.player.state.is_playing())
                 {
                     info!(
-                        charge_point_state = %self.charge_point.state_name(),
+                        charge_system_state = %self.charge_system.state_name(),
                         old_player_state = ?self.player.state,
                         "switching to Player state",
                     );
                     self.switch_to_player_state(new_player_state);
                 } else {
                     debug!(
-                        charge_point_state = %self.charge_point.state_name(),
+                        charge_system_state = %self.charge_system.state_name(),
                         "updating (not displaying)",
                     );
                 }
@@ -388,70 +391,115 @@ impl Display {
                 self.update_player(new_player_state, data).await;
             }
             DisplayCmd::Player(PlayerNotification::BasePosition {
-                position_us,
+                position_s,
                 instant,
             }) => {
-                debug!(base_pos_us = %position_us, state = ?self.state);
-                self.player.data.base_position_us = position_us;
+                debug!(base_pos_s = %position_s, state = ?self.state);
+                self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint {
+            DisplayCmd::ChargeSystem {
                 notification: state,
                 instant,
             } => {
-                self.update_charge_point(state, instant).await;
+                self.update_charge_system(state, instant).await;
             }
         }
     }
 
     /// Update internal state data
-    async fn update_charge_point(
+    async fn update_charge_system(
         &mut self,
-        notification: ChargePointNotification,
+        notification: ChargeSystemNotification,
         instant: Instant,
     ) {
         if notification.is_critical() {
-            warn!(?notification, "charge point");
+            warn!(?notification, "charge system");
         } else {
-            debug!(?notification, "charge point");
+            debug!(?notification, "charge system");
         }
 
-        use ChargePointConnectionState::*;
-        use ChargePointNotification::*;
+        use ChargeSystemNotification::*;
         match notification {
-            Charge(charge_state) => {
-                self.charge_point.clear_connection_alert();
-                self.charge_point.charge_state = charge_state;
-                self.charge_point.update_base_instant = instant;
-                self.set_tick_timeout(self.charge_point.get_tick_timeout());
+            Status(charge_status) => {
+                self.state = DisplayState::ChargeSystem;
+                self.charge_system.clear_connection_alert();
+
+                if let ChargeStatus::Charging(ref progress) = charge_status {
+                    if let ChargeStatus::Charging(ref cur_progress)
+                    | ChargeStatus::SuspendedEvse(ref cur_progress) =
+                        self.charge_system.charge_status
+                    {
+                        self.update_line1 |= ((progress.soc * 100.0).floor()
+                            - (cur_progress.soc * 100.0).floor())
+                        .abs()
+                            >= 1.0;
+                    } else {
+                        self.update_line1 = true;
+                    }
+                } else {
+                    self.update_line1 = true;
+                }
+
+                self.charge_system.charge_status = charge_status;
+                self.charge_system.update_base_instant = instant;
+                self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
-            Connection(Heartbeat) => {
-                if self.charge_point.clear_connection_alert() {
+            BmsUpdate(bms) => {
+                let target_soc = bms.target_soc.map(|bts| (bts * 100.0).round() as u8);
+                if self.charge_system.target_soc != target_soc {
+                    self.charge_system.target_soc = target_soc;
+                    self.update_line1 = true;
+                }
+            }
+            Connection(ChargePointConnectionState::Heartbeat) => {
+                if self.charge_system.clear_connection_alert() {
                     // recovered connection => get back to charge state
-                    self.set_tick_timeout(self.charge_point.get_tick_timeout());
+                    self.set_tick_timeout(self.charge_system.get_tick_timeout());
                 } else {
                     // no connection alert just ignore
                     return;
                 }
             }
             Connection(alert) => {
-                self.charge_point.connection_alert = Some(alert);
+                self.state = DisplayState::ChargeSystem;
+                self.charge_system.connection_alert = Some(alert);
                 self.disable_tick();
+            }
+            ChargingPlan(AppliedChargingPlan { plan, .. }) => {
+                if let charge_system::ChargingPlan::Deadline { target_soc, .. }
+                | charge_system::ChargingPlan::Asap { target_soc, .. } = plan
+                {
+                    let target_soc = (target_soc * 100.0).round() as u8;
+                    if self
+                        .charge_system
+                        .target_soc
+                        .is_none_or(|cur_target_soc| cur_target_soc != target_soc)
+                    {
+                        self.charge_system.target_soc = Some(target_soc);
+                        self.update_line1 = true;
+                    } else if self.charge_system.target_soc.is_some() {
+                        self.charge_system.target_soc = None;
+                        self.update_line1 = true;
+                    }
+                }
             }
             MeterValues(_) => {
                 return;
             }
         }
 
-        self.update_oled_in_charge_point_state().await;
+        if self.state == DisplayState::ChargeSystem {
+            self.update_oled_in_charge_system_state().await;
+        }
     }
 
-    async fn update_oled_in_charge_point_state(&mut self) {
-        if let Some(alert) = self.charge_point.connection_alert {
+    async fn update_oled_in_charge_system_state(&mut self) {
+        if let Some(alert) = self.charge_system.connection_alert {
             debug_assert!(!alert.is_heartbeat());
 
             self.oled
-                .write_line(LineNb::One, "×  serveur OCPP".chars())
+                .write_line(LineNb::One, "×  Charge System".chars())
                 .await;
             self.oled
                 .write_line(LineNb::Two, alert.name().chars())
@@ -460,31 +508,41 @@ impl Display {
             return;
         }
 
-        use ChargeState::*;
-        match &self.charge_point.charge_state {
+        use ChargeStatus::*;
+        match &self.charge_system.charge_status {
             Charging(progress) | SuspendedEvse(progress) => {
-                self.oled
-                    .write_line(
-                        LineNb::One,
-                        if self.charge_point.charge_state.is_charging() {
-                            "|> "
-                        } else {
-                            "|| "
-                        }
-                        .chars()
-                        .chain(
-                            format!("{:>2} / {:>2}% bat", progress.soc, progress.target_soc)
-                                .chars(),
-                        ),
-                    )
-                    .await;
+                if self.update_line1 {
+                    self.update_line1 = false;
 
-                let seconds_left = if self.charge_point.charge_state.is_charging() {
-                    progress.seconds_left.saturating_sub(
-                        self.charge_point.update_base_instant.elapsed().as_secs() as u16,
+                    let target_soc_str = if let Some(target_soc) = self.charge_system.target_soc {
+                        format!("{target_soc:>2}")
+                    } else {
+                        "??".to_string()
+                    };
+
+                    self.oled
+                        .write_line(
+                            LineNb::One,
+                            if self.charge_system.charge_status.is_charging() {
+                                "|> "
+                            } else {
+                                "|| "
+                            }
+                            .chars()
+                            .chain(format!("{:>2}", (progress.soc * 100.0).floor()).chars())
+                            .chain(" / ".chars())
+                            .chain(target_soc_str.chars())
+                            .chain("% bat".chars()),
+                        )
+                        .await;
+                }
+
+                let seconds_left = if self.charge_system.charge_status.is_charging() {
+                    progress.remaining_time.saturating_sub(
+                        self.charge_system.update_base_instant.elapsed().as_secs() as u32,
                     )
                 } else {
-                    progress.seconds_left
+                    progress.remaining_time
                 };
                 let minutes = seconds_left / 60;
                 let secs = seconds_left % 60;
@@ -530,20 +588,20 @@ impl Display {
                 self.update_player(player_state, data).await;
             }
             DisplayCmd::Player(PlayerNotification::BasePosition {
-                position_us,
+                position_s,
                 instant,
             }) => {
-                debug!(base_pos_us = %position_us, state = ?self.state, "update in Off state");
-                self.player.data.base_position_us = position_us;
+                debug!(base_pos_s = %position_s, state = ?self.state, "update in Off state");
+                self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargePoint {
+            DisplayCmd::ChargeSystem {
                 notification: state,
                 instant,
             } => {
                 self.oled.clear_on().await;
-                self.state = DisplayState::ChargePoint;
-                self.update_charge_point(state, instant).await;
+                self.state = DisplayState::ChargeSystem;
+                self.update_charge_system(state, instant).await;
             }
         }
     }
@@ -556,13 +614,18 @@ impl Display {
             if let Some(tick_period) = self.tick_timeout {
                 tokio::select! {
                     biased;
-                    cmd = self.cmd_rx.recv() => match cmd {
-                        Some(cmd) => self.on_command(cmd).await,
-                        None => {
+                    cmd = self.cmd_rx.recv() => {
+                        if self.cmd_rx.len() + 2 > self.cmd_rx.capacity() {
+                            warn!(len = %self.cmd_rx.len(), capa = %self.cmd_rx.capacity(), "command chan");
+                        }
+
+                        if let Some(cmd) = cmd {
+                            self.on_command(cmd).await;
+                        } else {
                             info!("command chan terminated");
                             break;
                         }
-                    },
+                    }
                     _ = time::sleep(
                         tick_period.saturating_sub(self.last_tick.elapsed())
                     ) => {
@@ -603,7 +666,7 @@ impl Display {
     async fn on_command(&mut self, cmd: DisplayCmd) {
         match self.state {
             DisplayState::Player => self.on_command_in_player_state(cmd).await,
-            DisplayState::ChargePoint => self.on_command_in_charge_point_state(cmd).await,
+            DisplayState::ChargeSystem => self.on_command_in_charge_system_state(cmd).await,
             DisplayState::Off => self.on_command_in_off_state(cmd).await,
         }
     }
@@ -633,29 +696,29 @@ impl Display {
         });
     }
 
-    async fn switch_back_to_charge_point_state(&mut self) {
+    async fn switch_back_to_charge_system_state(&mut self) {
         debug!(
-            charge_point_state = %self.charge_point.state_name(),
-            "switching back to charge point state",
+            charge_system_state = %self.charge_system.state_name(),
+            "switching back to charge system state",
         );
 
-        self.state = DisplayState::ChargePoint;
+        self.state = DisplayState::ChargeSystem;
 
         self.update_line1 = true;
         self.update_line2 = true;
 
-        // This is different from the regular charge point timeouts
+        // This is different from the regular charge system timeouts
         // since user explicitly went to Player stopped, then playing again,
-        // discarding the charge point state / alert.
-        // Let's just display the charge point state / alert until
+        // discarding the charge system state / alert.
+        // Let's just display the charge system state / alert until
         // timeout, except if a charge is in progress.
-        self.set_tick_timeout(Some(if self.charge_point.charge_state.is_charging() {
+        self.set_tick_timeout(Some(if self.charge_system.charge_status.is_charging() {
             CHARGING_REFRESH_INTERVAL
         } else {
             IDLE_TICK_TIMEOUT
         }));
 
-        self.update_oled_in_charge_point_state().await;
+        self.update_oled_in_charge_system_state().await;
     }
 
     fn set_line2_with_player_title(&mut self) {
@@ -679,29 +742,29 @@ impl Display {
     }
 }
 
-impl ChargePointNotification {
-    pub fn name(&self) -> &'static str {
-        use ChargePointNotification::*;
-        match self {
-            Charge(charge_state) => charge_state.name(),
-            Connection(connection) => connection.name(),
-            MeterValues(_) => "mesures",
-        }
-    }
-
-    pub fn is_critical(&self) -> bool {
+pub trait ChargeSystemNotificationExt {
+    fn is_critical(&self) -> bool;
+}
+impl ChargeSystemNotificationExt for ChargeSystemNotification {
+    fn is_critical(&self) -> bool {
         matches!(
             self,
-            ChargePointNotification::Charge(ChargeState::Error)
-                | ChargePointNotification::Connection(ChargePointConnectionState::Error)
-                | ChargePointNotification::Connection(ChargePointConnectionState::MissedHeartbeat)
+            ChargeSystemNotification::Status(ChargeStatus::Error)
+                | ChargeSystemNotification::Connection(ChargePointConnectionState::Error)
+                | ChargeSystemNotification::Connection(ChargePointConnectionState::MissedHeartbeat)
         )
     }
 }
 
-impl ChargeState {
-    pub fn name(&self) -> &'static str {
-        use ChargeState::*;
+trait ChargeStatusExt {
+    fn name(&self) -> &'static str;
+    fn is_charging(&self) -> bool;
+    fn is_error(&self) -> bool;
+    fn is_significant(&self) -> bool;
+}
+impl ChargeStatusExt for ChargeStatus {
+    fn name(&self) -> &'static str {
+        use ChargeStatus::*;
         match self {
             Available => "disponible",
             Preparing => "en préparation",
@@ -715,28 +778,33 @@ impl ChargeState {
         }
     }
 
-    pub fn is_charging(&self) -> bool {
+    fn is_charging(&self) -> bool {
         matches!(self, Self::Charging(_))
     }
-    pub fn is_error(&self) -> bool {
+    fn is_error(&self) -> bool {
         matches!(self, Self::Error)
     }
-    pub fn is_significant(&self) -> bool {
+    fn is_significant(&self) -> bool {
         matches!(
             self,
-            ChargeState::Charging(_)
-                | ChargeState::SuspendedEvse(_)
-                | ChargeState::SuspendedEv
-                | ChargeState::StoppedByUser
-                | ChargeState::Finishing
-                | ChargeState::UnknownSession
-                | ChargeState::Error
+            ChargeStatus::Charging(_)
+                | ChargeStatus::SuspendedEvse(_)
+                | ChargeStatus::SuspendedEv
+                | ChargeStatus::StoppedByUser
+                | ChargeStatus::Finishing
+                | ChargeStatus::UnknownSession
+                | ChargeStatus::Error
         )
     }
 }
 
-impl ChargePointConnectionState {
-    pub fn name(&self) -> &'static str {
+trait ChargeSystemConnectionStateExt {
+    fn name(&self) -> &'static str;
+    fn is_heartbeat(&self) -> bool;
+    fn is_alert(&self) -> bool;
+}
+impl ChargeSystemConnectionStateExt for ChargePointConnectionState {
+    fn name(&self) -> &'static str {
         use ChargePointConnectionState::*;
         match self {
             Heartbeat => "pulsation",
@@ -746,10 +814,10 @@ impl ChargePointConnectionState {
         }
     }
 
-    pub fn is_heartbeat(&self) -> bool {
+    fn is_heartbeat(&self) -> bool {
         matches!(self, ChargePointConnectionState::Heartbeat)
     }
-    pub fn is_alert(&self) -> bool {
+    fn is_alert(&self) -> bool {
         matches!(
             self,
             ChargePointConnectionState::Error

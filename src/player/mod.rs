@@ -10,8 +10,8 @@ pub use aggregator::PlayerAggregator;
 mod mpd;
 pub use mpd::MpdPlayer;
 
-mod mpris;
-pub use mpris::MprisPlayer;
+mod pibuz;
+pub use pibuz::PibuzPlayer;
 
 pub const DEFAULT_TITLE: &str = "";
 
@@ -38,9 +38,9 @@ impl PlaybackState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerData {
     pub title: Arc<str>,
-    pub base_position_us: u64,
+    pub base_position_s: u16,
     pub base_position_instant: Instant,
-    pub duration_us: u64,
+    pub duration_s: u16,
 }
 
 impl PlayerData {
@@ -53,9 +53,9 @@ impl Default for PlayerData {
     fn default() -> Self {
         PlayerData {
             title: DEFAULT_TITLE.into(),
-            base_position_us: 0,
+            base_position_s: 0,
             base_position_instant: Instant::now(),
-            duration_us: 0,
+            duration_s: 0,
         }
     }
 }
@@ -67,7 +67,7 @@ pub enum PlayerNotification {
         data: PlayerData,
     },
     BasePosition {
-        position_us: u64,
+        position_s: u16,
         instant: Instant,
     },
 }

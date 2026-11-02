@@ -12,22 +12,20 @@ name = "check-oled"
 path = "bin/check_oled.rs"
 
 [[bin]]
-name = "ocpp-server-simu"
-path = "bin/ocpp_server_simu.rs"
+name = "charge-system-simu"
+path = "bin/charge_system_simu.rs"
 
 [dependencies]
-# FIXME remove
-chrono = { version = "0.4.45", features = ["serde"] }
-futures-lite = { version = "2.6.1", default-features = false }
+charge_system_common = { package = "charge-system-common-model",  path = "../ocpp/server/crates/common_model"  }
 mpd_client = { git = "https://github.com/fengalin/mpd_client", branch = "update-dependencies" }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
 rpi-pal = "0.22"
 serde = { version = "^1", features = ["derive", "alloc"] }
 serde_json = "^1"
 thiserror = "2"
-tokio = { version = "1", features = ["sync", "macros", "rt", "signal", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "signal", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [profile.release-slim]
 inherits = "release"
