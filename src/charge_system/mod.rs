@@ -126,10 +126,11 @@ impl ChargeSystemListener {
 
                     // filter which notification we are interested in
                     match &notif {
+                        Notification::MeterValues(_) => continue,
                         Notification::BmsUpdate(_) |
                         Notification::Connection(_) |
-                        Notification::Status(_) => (),
-                        _ => continue,
+                        Notification::Status(_) |
+                        Notification::ChargingPlan(_) => (),
                     }
 
                     self.display_cmd_tx
