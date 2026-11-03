@@ -10,9 +10,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, error, info, warn};
 
-use super::{
-    DEFAULT_TITLE, NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotification,
-};
+use super::{NamedPlayerNotification, PlaybackState, PlayerData, PlayerNotification};
 
 /// The pibuz daemon listens on this address (same machine).
 const PIBUZ_ADDR: &str = "127.0.0.1:8182";
@@ -79,25 +77,6 @@ struct PositionUpdatedData {
 #[derive(Debug, Deserialize)]
 struct StateChangedData {
     state: PibuzState,
-}
-
-/// Body of `GET /api/now-playing`.
-#[derive(Debug, Default, Deserialize)]
-struct NowPlaying {
-    #[serde(default)]
-    playback: NowPlayingPlayback,
-    #[serde(default)]
-    track: Track,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct NowPlayingPlayback {
-    #[serde(default)]
-    is_playing: bool,
-    #[serde(default)]
-    position: u64,
-    #[serde(default)]
-    duration: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -182,11 +161,7 @@ impl PibuzPlayer {
     }
 
     async fn listen(&mut self) -> Result<(), PibuzError> {
-        let client = reqwest::Client::new();
-
-        self.check_now_playing(&client).await?;
-
-        let mut resp = client
+        let mut resp = reqwest::Client::new()
             .get(format!("http://{PIBUZ_ADDR}/api/events"))
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .send()
@@ -207,37 +182,6 @@ impl PibuzPlayer {
 
         info!(player = %self.name, "event stream terminated");
         Ok(())
-    }
-
-    async fn check_now_playing(&mut self, client: &reqwest::Client) -> Result<(), PibuzError> {
-        let resp = client
-            .get(format!("http://{PIBUZ_ADDR}/api/now-playing"))
-            .send()
-            .await?;
-
-        let now_playing: NowPlaying = resp.json().await?;
-
-        self.state = if now_playing.playback.is_playing {
-            PlaybackState::Playing
-        } else {
-            PlaybackState::Paused
-        };
-        info!(player = %self.name, state = ?self.state, "got now-playing resp");
-
-        let title = if now_playing.track.title.is_empty() {
-            DEFAULT_TITLE
-        } else {
-            now_playing.track.title.as_str()
-        };
-
-        debug!(player = %self.name, new = %title, "title");
-        self.data.title = title.into();
-
-        self.data.base_position_s = now_playing.playback.position as u16;
-        self.data.base_position_instant = Instant::now();
-        self.data.duration_s = now_playing.playback.duration as u16;
-
-        self.send_update().await
     }
 
     async fn on_event(&mut self, ev: SseEvent) -> Result<(), PibuzError> {
