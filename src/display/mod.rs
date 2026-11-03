@@ -14,7 +14,7 @@ use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::charge_system::{
-    self, AppliedChargingPlan, ChargePointConnectionState, ChargeStatus,
+    self, AppliedChargingPlan, ChargeStatus, ChargeSystemConnectionState,
     Notification as ChargeSystemNotification,
 };
 use crate::{PlaybackState, PlayerData, PlayerNotification};
@@ -82,7 +82,7 @@ struct ChargeSystem {
     charge_status: ChargeStatus,
     target_soc: Option<u8>,
     update_base_instant: Instant,
-    connection_alert: Option<ChargePointConnectionState>,
+    connection_alert: Option<ChargeSystemConnectionState>,
 }
 
 impl ChargeSystem {
@@ -446,7 +446,7 @@ impl Display {
                     self.update_line1 = true;
                 }
 
-                self.charge_system.charge_status = charge_status.clone();
+                self.charge_system.charge_status = *charge_status;
                 self.charge_system.update_base_instant = instant;
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
@@ -457,7 +457,7 @@ impl Display {
                     self.update_line1 = true;
                 }
             }
-            Connection(ChargePointConnectionState::Heartbeat) => {
+            Connection(ChargeSystemConnectionState::Heartbeat) => {
                 if self.charge_system.clear_connection_alert(&notification) {
                     // recovered connection => get back to charge state
                     self.set_tick_timeout(self.charge_system.get_tick_timeout());
@@ -755,8 +755,10 @@ impl ChargeSystemNotificationExt for ChargeSystemNotification {
         matches!(
             self,
             ChargeSystemNotification::Status(ChargeStatus::Error)
-                | ChargeSystemNotification::Connection(ChargePointConnectionState::Error)
-                | ChargeSystemNotification::Connection(ChargePointConnectionState::MissedHeartbeat)
+                | ChargeSystemNotification::Connection(ChargeSystemConnectionState::Error)
+                | ChargeSystemNotification::Connection(
+                    ChargeSystemConnectionState::MissedHeartbeat
+                )
         )
     }
 }
@@ -808,9 +810,9 @@ trait ChargeSystemConnectionStateExt {
     fn is_heartbeat(&self) -> bool;
     fn is_alert(&self) -> bool;
 }
-impl ChargeSystemConnectionStateExt for ChargePointConnectionState {
+impl ChargeSystemConnectionStateExt for ChargeSystemConnectionState {
     fn name(&self) -> &'static str {
-        use ChargePointConnectionState::*;
+        use ChargeSystemConnectionState::*;
         match self {
             Heartbeat => "pulsation",
             MissedHeartbeat => "absence de pouls",
@@ -820,14 +822,14 @@ impl ChargeSystemConnectionStateExt for ChargePointConnectionState {
     }
 
     fn is_heartbeat(&self) -> bool {
-        matches!(self, ChargePointConnectionState::Heartbeat)
+        matches!(self, ChargeSystemConnectionState::Heartbeat)
     }
     fn is_alert(&self) -> bool {
         matches!(
             self,
-            ChargePointConnectionState::Error
-                | ChargePointConnectionState::MissedHeartbeat
-                | ChargePointConnectionState::ServerDisconnected
+            ChargeSystemConnectionState::Error
+                | ChargeSystemConnectionState::MissedHeartbeat
+                | ChargeSystemConnectionState::ServerDisconnected
         )
     }
 }
