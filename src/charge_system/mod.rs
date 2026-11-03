@@ -13,7 +13,7 @@ use crate::display::DisplayCmd;
 pub use charge_system_common::{
     bms::Bms,
     notification::{
-        ChargePointConnectionState, ChargeProgress, ChargeStatus, Notification, UNIX_SOCKET_PATH,
+        ChargeProgress, ChargeStatus, ChargeSystemConnectionState, Notification, UNIX_SOCKET_PATH,
     },
     plan_model::{AppliedChargingPlan, ChargingPlan},
 };
@@ -79,7 +79,7 @@ impl ChargeSystemListener {
                             .display_cmd_tx
                             .send(DisplayCmd::ChargeSystem {
                                 notification: Notification::Connection(
-                                    ChargePointConnectionState::ServerDisconnected,
+                                    ChargeSystemConnectionState::ServerDisconnected,
                                 ),
                                 instant: Instant::now(),
                             })
@@ -148,7 +148,7 @@ impl ChargeSystemListener {
 
                     self.display_cmd_tx
                         .send(DisplayCmd::ChargeSystem {
-                            notification: Notification::Connection(ChargePointConnectionState::MissedHeartbeat),
+                            notification: Notification::Connection(ChargeSystemConnectionState::MissedHeartbeat),
                             instant: now,
                         })
                         .await?;

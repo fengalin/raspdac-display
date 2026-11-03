@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use raspdac_display::charge_system::{
-    Bms, ChargePointConnectionState, ChargeProgress, ChargeStatus, Notification, UNIX_SOCKET_PATH,
+    Bms, ChargeProgress, ChargeStatus, ChargeSystemConnectionState, Notification, UNIX_SOCKET_PATH,
 };
 
 async fn run(listener: UnixListener, mut msgs: Option<VecDeque<Notification>>) -> io::Result<()> {
@@ -98,9 +98,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "available" => Notification::Status(ChargeStatus::Available),
             "preparing" => Notification::Status(ChargeStatus::Preparing),
             "charge_error" => Notification::Status(ChargeStatus::Error),
-            "error" => Notification::Connection(ChargePointConnectionState::Error),
-            "heartbeat" => Notification::Connection(ChargePointConnectionState::Heartbeat),
-            "mheartbeat" => Notification::Connection(ChargePointConnectionState::MissedHeartbeat),
+            "error" => Notification::Connection(ChargeSystemConnectionState::Error),
+            "heartbeat" => Notification::Connection(ChargeSystemConnectionState::Heartbeat),
+            "mheartbeat" => Notification::Connection(ChargeSystemConnectionState::MissedHeartbeat),
             other => panic!("unknown {other}"),
         }))
     });
