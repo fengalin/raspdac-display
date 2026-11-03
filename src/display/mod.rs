@@ -95,9 +95,14 @@ impl ChargeSystem {
     fn is_significant(&self) -> bool {
         self.must_alert() || self.charge_status.is_significant()
     }
-    fn clear_connection_alert(&mut self) -> bool {
-        if self.connection_alert.take().is_some() {
-            debug!(charge_state = ?self.charge_status, "cleared charge system alert");
+    fn clear_connection_alert(&mut self, notification: &ChargeSystemNotification) -> bool {
+        if let Some(alert) = self.connection_alert.take() {
+            info!(
+                notification = %notification.name(),
+                charge_state = ?self.charge_status,
+                ?alert,
+                "cleared charge system connection alert",
+            );
             true
         } else {
             false
@@ -420,12 +425,12 @@ impl Display {
         }
 
         use ChargeSystemNotification::*;
-        match notification {
+        match &notification {
             Status(charge_status) => {
                 self.state = DisplayState::ChargeSystem;
-                self.charge_system.clear_connection_alert();
+                self.charge_system.clear_connection_alert(&notification);
 
-                if let ChargeStatus::Charging(ref progress) = charge_status {
+                if let ChargeStatus::Charging(progress) = charge_status {
                     if let ChargeStatus::Charging(ref cur_progress)
                     | ChargeStatus::SuspendedEvse(ref cur_progress) =
                         self.charge_system.charge_status
@@ -441,7 +446,7 @@ impl Display {
                     self.update_line1 = true;
                 }
 
-                self.charge_system.charge_status = charge_status;
+                self.charge_system.charge_status = charge_status.clone();
                 self.charge_system.update_base_instant = instant;
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
@@ -453,7 +458,7 @@ impl Display {
                 }
             }
             Connection(ChargePointConnectionState::Heartbeat) => {
-                if self.charge_system.clear_connection_alert() {
+                if self.charge_system.clear_connection_alert(&notification) {
                     // recovered connection => get back to charge state
                     self.set_tick_timeout(self.charge_system.get_tick_timeout());
                 } else {
@@ -463,7 +468,7 @@ impl Display {
             }
             Connection(alert) => {
                 self.state = DisplayState::ChargeSystem;
-                self.charge_system.connection_alert = Some(alert);
+                self.charge_system.connection_alert = Some(*alert);
                 self.disable_tick();
             }
             ChargingPlan(AppliedChargingPlan { plan, .. }) => {
@@ -612,7 +617,7 @@ impl Display {
                 tokio::select! {
                     biased;
                     cmd = self.cmd_rx.recv() => {
-                        if self.cmd_rx.len() + 2 > self.cmd_rx.capacity() {
+                        if self.cmd_rx.len() + 3 > self.cmd_rx.capacity() {
                             warn!(len = %self.cmd_rx.len(), capa = %self.cmd_rx.capacity(), "command chan");
                         }
 
