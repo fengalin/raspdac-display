@@ -111,12 +111,17 @@ impl ChargeSystem {
     fn get_tick_timeout(&self) -> Option<Duration> {
         if let Some(alert) = self.connection_alert {
             debug_assert!(!alert.is_heartbeat());
+            debug!("disabling ticks due to alert");
             return None;
         }
 
         match self.charge_status {
-            ChargeStatus::Charging(_) => Some(CHARGING_REFRESH_INTERVAL),
-            ChargeStatus::SuspendedEvse(_) | ChargeStatus::Error => None,
+            ChargeStatus::Charging(progress) if progress.remaining_time > 0 => {
+                Some(CHARGING_REFRESH_INTERVAL)
+            }
+            ChargeStatus::Charging(_) | ChargeStatus::SuspendedEvse(_) | ChargeStatus::Error => {
+                None
+            }
             _ => Some(IDLE_TICK_TIMEOUT),
         }
     }
@@ -439,11 +444,15 @@ impl Display {
                             - (cur_progress.soc * 100.0).floor())
                         .abs()
                             >= 1.0;
+
+                        self.update_line2 = progress.remaining_time != cur_progress.remaining_time;
                     } else {
                         self.update_line1 = true;
+                        self.update_line2 = true;
                     }
                 } else {
                     self.update_line1 = true;
+                    self.update_line2 = true;
                 }
 
                 self.charge_system.charge_status = *charge_status;
@@ -555,21 +564,23 @@ impl Display {
                         .await;
                 }
 
-                let seconds_left = if self.charge_system.charge_status.is_charging() {
-                    progress.remaining_time.saturating_sub(
-                        self.charge_system.update_base_instant.elapsed().as_secs() as u32,
-                    )
-                } else {
-                    progress.remaining_time
-                };
-                let minutes = seconds_left / 60;
-                let secs = seconds_left % 60;
-                self.oled
-                    .write_line(
-                        LineNb::Two,
-                        format!("{minutes:02}:{secs:02} prévues").chars(),
-                    )
-                    .await;
+                if self.update_line2 {
+                    let seconds_left = if self.charge_system.charge_status.is_charging() {
+                        progress.remaining_time.saturating_sub(
+                            self.charge_system.update_base_instant.elapsed().as_secs() as u32,
+                        )
+                    } else {
+                        progress.remaining_time
+                    };
+                    let minutes = seconds_left / 60;
+                    let secs = seconds_left % 60;
+                    self.oled
+                        .write_line(
+                            LineNb::Two,
+                            format!("{minutes:02}:{secs:02} prévues").chars(),
+                        )
+                        .await;
+                }
             }
             other => {
                 let symbol = if other.is_error() { '×' } else { '⛶' };
