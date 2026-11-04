@@ -8,10 +8,22 @@ use raspdac_display::{ChargeSystemListener, Display, MpdPlayer, PibuzPlayer, Pla
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+    use tracing_subscriber::{filter::LevelFilter, prelude::*};
+
+    let env_filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    let with_debug = env_filter
+        .max_level_hint()
+        .is_some_and(|l| l >= LevelFilter::DEBUG);
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_thread_ids(with_debug)
+                .with_line_number(with_debug),
         )
+        .with(env_filter)
         .init();
 
     let (stop_tx, stop_rx) = broadcast::channel(8);

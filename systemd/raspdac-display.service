@@ -6,10 +6,12 @@ After=dbus.service
 
 [Service]
 ExecStart=/usr/local/bin/raspdac-display
+Environment=RUST_LOG=info
+StandardOutput=append:/home/qobuz/display_out.log
+StandardError=append:/home/qobuz/display_err.log
 KillSignal=SIGINT
 Restart=on-failure
 RestartSec=3
-Environment=RUST_LOG=info
 
 [Install]
 WantedBy=default.target
