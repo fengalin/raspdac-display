@@ -451,6 +451,19 @@ impl Display {
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
             BmsUpdate(bms) => {
+                // TODO: handle relative SoC
+                if let Some(cur_soc) = bms.current_soc().inner() {
+                    if let ChargeStatus::Charging(ref mut cur_progress)
+                    | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
+                        self.charge_system.charge_status
+                        && ((cur_progress.soc * 100.0).floor() - (cur_soc * 100.0).floor()).abs()
+                            >= 1.0
+                    {
+                        cur_progress.soc = cur_soc;
+                        self.update_line1 = true;
+                    }
+                }
+
                 let target_soc = bms.target_soc.map(|bts| (bts * 100.0).round() as u8);
                 if self.charge_system.target_soc != target_soc {
                     self.charge_system.target_soc = target_soc;
