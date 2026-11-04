@@ -440,11 +440,7 @@ impl Display {
                     | ChargeStatus::SuspendedEvse(ref cur_progress) =
                         self.charge_system.charge_status
                     {
-                        self.update_line1 |= ((progress.soc * 100.0).floor()
-                            - (cur_progress.soc * 100.0).floor())
-                        .abs()
-                            >= 1.0;
-
+                        self.update_line1 |= (progress.soc - cur_progress.soc).abs() >= 0.001;
                         self.update_line2 = progress.remaining_time != cur_progress.remaining_time;
                     } else {
                         self.update_line1 = true;
@@ -461,14 +457,13 @@ impl Display {
             }
             BmsUpdate(bms) => {
                 // TODO: handle relative SoC
-                if let Some(cur_soc) = bms.current_soc().inner() {
+                if let Some(bcs) = bms.current_soc().inner() {
                     if let ChargeStatus::Charging(ref mut cur_progress)
                     | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
                         self.charge_system.charge_status
-                        && ((cur_progress.soc * 100.0).floor() - (cur_soc * 100.0).floor()).abs()
-                            >= 1.0
+                        && (cur_progress.soc - bcs).abs() >= 0.001
                     {
-                        cur_progress.soc = cur_soc;
+                        cur_progress.soc = bcs;
                         self.update_line1 = true;
                     }
                 }
@@ -556,10 +551,10 @@ impl Display {
                                 "|| "
                             }
                             .chars()
-                            .chain(format!("{:>2}", (progress.soc * 100.0).floor()).chars())
+                            .chain(format!("{:<4}", (progress.soc * 1000.0).round() / 10.0).chars())
                             .chain(" / ".chars())
                             .chain(target_soc_str.chars())
-                            .chain("% bat".chars()),
+                            .chain(std::iter::once('%')),
                         )
                         .await;
                 }
