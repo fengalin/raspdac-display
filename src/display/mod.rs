@@ -440,7 +440,7 @@ impl Display {
                     | ChargeStatus::SuspendedEvse(ref cur_progress) =
                         self.charge_system.charge_status
                     {
-                        self.update_line1 |= (progress.soc - cur_progress.soc).abs() >= 0.001;
+                        self.update_line1 |= !progress.soc.pratically_equals(cur_progress.soc);
                         self.update_line2 = progress.remaining_time != cur_progress.remaining_time;
                     } else {
                         self.update_line1 = true;
@@ -456,16 +456,14 @@ impl Display {
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
             BmsUpdate(bms) => {
-                // TODO: handle relative SoC
-                if let Some(bcs) = bms.current_soc().inner() {
-                    if let ChargeStatus::Charging(ref mut cur_progress)
-                    | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
-                        self.charge_system.charge_status
-                        && (cur_progress.soc - bcs).abs() >= 0.001
-                    {
-                        cur_progress.soc = bcs;
-                        self.update_line1 = true;
-                    }
+                let bms_cur_soc = bms.current_soc();
+                if let ChargeStatus::Charging(ref mut cur_progress)
+                | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
+                    self.charge_system.charge_status
+                    && !cur_progress.soc.pratically_equals(bms_cur_soc)
+                {
+                    cur_progress.soc = bms_cur_soc;
+                    self.update_line1 = true;
                 }
 
                 let target_soc = bms.target_soc.map(|bts| (bts * 100.0).round() as u8);
@@ -543,19 +541,14 @@ impl Display {
                         .write_line(
                             LineNb::One,
                             if self.charge_system.charge_status.is_charging() {
-                                "|> "
+                                "|>"
                             } else {
-                                "|| "
+                                "||"
                             }
                             .chars()
-<<<<<<< Updated upstream
-                            .chain(format!("{:<4}", (progress.soc * 1000.0).round() / 10.0).chars())
-=======
                             .chain(format!("{:>6}", progress.soc.to_string()).chars())
->>>>>>> Stashed changes
                             .chain(" / ".chars())
-                            .chain(target_soc_str.chars())
-                            .chain(std::iter::once('%')),
+                            .chain(target_soc_str.chars()),
                         )
                         .await;
                 }

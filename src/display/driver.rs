@@ -224,6 +224,7 @@ fn map_char(c: char) -> u8 {
     match c {
         '\\' => 0xca,
         ' '..'}' => c as u8, // matching ascii chars except for '\\' which maps to the yen symbol
+        '—' => b'-',
         '→' => 0x7e,
         '←' => 0x7f,
         'Û' => 0x80,

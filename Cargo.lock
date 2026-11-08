@@ -130,11 +130,13 @@ dependencies = [
 [[package]]
 name = "charge-system-common-model"
 version = "0.1.0"
+source = "git+https://github.com/fengalin/ocpp-server?branch=webserver-wasm#e781983959077ae065b413a111c0cda2c40fb98d"
 dependencies = [
  "chrono",
- "log",
  "serde",
  "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -940,6 +942,7 @@ name = "raspdac-display"
 version = "0.1.0"
 dependencies = [
  "charge-system-common-model",
+ "chrono",
  "mpd_client",
  "reqwest",
  "rpi-pal",

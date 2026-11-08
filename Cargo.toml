@@ -16,7 +16,8 @@ name = "charge-system-simu"
 path = "bin/charge_system_simu.rs"
 
 [dependencies]
-charge_system_common = { package = "charge-system-common-model",  path = "../ocpp/server/crates/common_model"  }
+charge_system_common = { package = "charge-system-common-model",  git = "https://github.com/fengalin/ocpp-server", branch = "webserver-wasm"  }
+chrono = "0.4.45"
 mpd_client = { git = "https://github.com/fengalin/mpd_client", branch = "update-dependencies" }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
 rpi-pal = "0.22"

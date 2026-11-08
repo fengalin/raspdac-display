@@ -1,3 +1,4 @@
+use charge_system_common::bms::SoC;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
@@ -76,21 +77,23 @@ async fn notifier(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let msgs = std::env::args().nth(1).map(|arg1| {
         VecDeque::from_iter(arg1.split(',').map(|part| match part {
-            "bms_update" => Notification::BmsUpdate(Bms::builder(48_100).target_soc(0.50).build()),
+            "bms_update" => {
+                Notification::BmsUpdate(Bms::builder(48_100).target_soc(0.50).build().unwrap())
+            }
             "charging" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
-                soc: 0.30,
+                soc: SoC::new_absolute(0.30),
                 remaining_time: 120,
             })),
             "charging2" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
-                soc: 0.306,
+                soc: SoC::new_absolute(0.306),
                 remaining_time: 110,
             })),
             "charging3" => Notification::Status(ChargeStatus::Charging(ChargeProgress {
-                soc: 0.311,
+                soc: SoC::new_absolute(0.311),
                 remaining_time: 100,
             })),
             "sevse" => Notification::Status(ChargeStatus::SuspendedEvse(ChargeProgress {
-                soc: 0.49,
+                soc: SoC::new_absolute(0.49),
                 remaining_time: 0,
             })),
             "sev" => Notification::Status(ChargeStatus::SuspendedEv),
