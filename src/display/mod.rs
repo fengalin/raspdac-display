@@ -456,6 +456,8 @@ impl Display {
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
             BmsUpdate(bms) => {
+                self.charge_system.clear_connection_alert(&notification);
+
                 let bms_cur_soc = bms.current_soc();
                 if let ChargeStatus::Charging(ref mut cur_progress)
                 | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
@@ -463,13 +465,13 @@ impl Display {
                     && !cur_progress.soc.pratically_equals(bms_cur_soc)
                 {
                     cur_progress.soc = bms_cur_soc;
-                    self.update_line1 = true;
+                    self.update_line1 = self.charge_system.charge_status.shows_soc();
                 }
 
                 let target_soc = bms.target_soc.map(|bts| (bts * 100.0).round() as u8);
                 if self.charge_system.target_soc != target_soc {
                     self.charge_system.target_soc = target_soc;
-                    self.update_line1 = true;
+                    self.update_line1 = self.charge_system.charge_status.shows_soc();
                 }
             }
             Connection(ChargeSystemConnectionState::Heartbeat) => {
@@ -487,6 +489,8 @@ impl Display {
                 self.disable_tick();
             }
             ChargingPlan(AppliedChargingPlan { plan, .. }) => {
+                self.charge_system.clear_connection_alert(&notification);
+
                 if let charge_system::ChargingPlan::Deadline { target_soc, .. }
                 | charge_system::ChargingPlan::Asap { target_soc, .. } = plan
                 {
@@ -497,7 +501,7 @@ impl Display {
                         .is_none_or(|cur_target_soc| cur_target_soc != target_soc)
                     {
                         self.charge_system.target_soc = Some(target_soc);
-                        self.update_line1 = true;
+                        self.update_line1 = self.charge_system.charge_status.shows_soc();
                     }
                 }
             }
@@ -779,6 +783,7 @@ impl ChargeSystemNotificationExt for ChargeSystemNotification {
 trait ChargeStatusExt {
     fn name(&self) -> &'static str;
     fn is_charging(&self) -> bool;
+    fn shows_soc(&self) -> bool;
     fn is_error(&self) -> bool;
     fn is_significant(&self) -> bool;
 }
@@ -800,6 +805,9 @@ impl ChargeStatusExt for ChargeStatus {
 
     fn is_charging(&self) -> bool {
         matches!(self, Self::Charging(_))
+    }
+    fn shows_soc(&self) -> bool {
+        matches!(self, Self::Charging(_) | Self::SuspendedEvse(_))
     }
     fn is_error(&self) -> bool {
         matches!(self, Self::Error)
