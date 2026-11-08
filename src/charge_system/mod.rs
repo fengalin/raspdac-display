@@ -56,11 +56,11 @@ impl ChargeSystemListener {
             _  = stop_rx.recv() => {
                 info!("shutting down due to stop request");
             }
-            _ = self.listen() => (),
+            _ = self.connect() => (),
         }
     }
 
-    async fn listen(&mut self) {
+    async fn connect(&mut self) {
         let socket_path = Path::new(UNIX_SOCKET_PATH);
         let mut log_connection_failure = true;
         loop {
@@ -109,36 +109,47 @@ impl ChargeSystemListener {
                     let now = Instant::now();
                     last_checkpoint_instant = now;
 
-                    let n = stream.read(&mut buf).await?;
+                    let n = stream.read(&mut buf).await.inspect_err(|err| {
+                        unsafe {
+                            warn!(?err, buf = %String::from_utf8_unchecked(buf.to_vec()));
+                        }
+                    })?;
                     if n == 0 {
                         return Err(ChargePointError::SocketTerminated);
                     }
 
                     let data = &buf[..n];
-                    trace!(%n, ?data, "read");
-                    let Ok(notif) = serde_json::from_slice::<Notification>(data).inspect_err(|err| {
-                        warn!(%err, "error deserializing message");
-                    }) else {
-                        continue;
-                    };
+                    trace!(data = %String::from_utf8_lossy(data), %n, "read");
 
-                    debug!(?notif);
 
-                    // filter which notification we are interested in
-                    match &notif {
-                        Notification::MeterValues(_) => continue,
-                        Notification::BmsUpdate(_) |
-                        Notification::Connection(_) |
-                        Notification::Status(_) |
-                        Notification::ChargingPlan(_) => (),
+                    for msg in data.split(|&b| b == b'\n') {
+                        if msg.len() < 2 {
+                            break;
+                        }
+                        let Ok(notif) = serde_json::from_slice::<Notification>(msg).inspect_err(|err| {
+                            warn!(?err, data = %String::from_utf8_lossy(msg), "error deserializing message");
+                        }) else {
+                            continue;
+                        };
+
+                        debug!(?notif);
+
+                        // filter which notification we are interested in
+                        match &notif {
+                            Notification::MeterValues(_) => continue,
+                            Notification::BmsUpdate(_) |
+                            Notification::Connection(_) |
+                            Notification::Status(_) |
+                            Notification::ChargingPlan(_) => (),
+                        }
+
+                        self.display_cmd_tx
+                            .send(DisplayCmd::ChargeSystem {
+                                notification: notif,
+                                instant: now,
+                            })
+                            .await?;
                     }
-
-                    self.display_cmd_tx
-                        .send(DisplayCmd::ChargeSystem {
-                            notification: notif,
-                            instant: now,
-                        })
-                        .await?;
                 }
                 _ = time::sleep(HEARTBEAT_TIMEOUT.saturating_sub(last_checkpoint_instant.elapsed())) => {
                     warn!("heartbeat timeout");
