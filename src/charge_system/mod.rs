@@ -1,3 +1,4 @@
+use chrono::Utc;
 use tokio::io::AsyncReadExt;
 use tokio::net::UnixStream;
 use tokio::sync::{broadcast, mpsc};
@@ -11,11 +12,10 @@ use std::time::{Duration, Instant};
 use crate::display::DisplayCmd;
 
 pub use charge_system_common::{
-    bms::Bms,
-    notification::{
-        ChargeProgress, ChargeStatus, ChargeSystemConnectionState, Notification, UNIX_SOCKET_PATH,
-    },
-    plan_model::{AppliedChargingPlan, ChargingPlan},
+    bms::{self, Bms},
+    model::Ts,
+    notification::{ChargeStatus, ChargeSystemConnectionState, Notification, UNIX_SOCKET_PATH},
+    plan_model::{self, AppliedChargingPlan, ChargingPlan},
 };
 
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -77,12 +77,10 @@ impl ChargeSystemListener {
                         warn!(%err, socket = ?socket_path, "connecting");
                         if let Err(err) = self
                             .display_cmd_tx
-                            .send(DisplayCmd::ChargeSystem {
-                                notification: Notification::Connection(
-                                    ChargeSystemConnectionState::ServerDisconnected,
-                                ),
-                                instant: Instant::now(),
-                            })
+                            .send(DisplayCmd::ChargeSystem(Notification::Connection {
+                                ts: Utc::now().into(),
+                                state: ChargeSystemConnectionState::ServerDisconnected,
+                            }))
                             .await
                         {
                             error!(%err, "display chan");
@@ -137,17 +135,14 @@ impl ChargeSystemListener {
                         // filter which notification we are interested in
                         match &notif {
                             Notification::MeterValues(_) => continue,
-                            Notification::BmsUpdate(_) |
-                            Notification::Connection(_) |
-                            Notification::Status(_) |
+                            Notification::BmsUpdate { .. } |
+                            Notification::Connection { .. } |
+                            Notification::Status { .. } |
                             Notification::ChargingPlan(_) => (),
                         }
 
                         self.display_cmd_tx
-                            .send(DisplayCmd::ChargeSystem {
-                                notification: notif,
-                                instant: now,
-                            })
+                            .send(DisplayCmd::ChargeSystem(notif))
                             .await?;
                     }
                 }
@@ -158,10 +153,9 @@ impl ChargeSystemListener {
                     last_checkpoint_instant = now;
 
                     self.display_cmd_tx
-                        .send(DisplayCmd::ChargeSystem {
-                            notification: Notification::Connection(ChargeSystemConnectionState::MissedHeartbeat),
-                            instant: now,
-                        })
+                        .send(DisplayCmd::ChargeSystem(
+                            Notification::Connection { ts: Utc::now().into(), state: ChargeSystemConnectionState::MissedHeartbeat,
+                        }))
                         .await?;
                 }
             }

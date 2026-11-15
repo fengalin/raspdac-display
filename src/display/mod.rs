@@ -9,12 +9,14 @@
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
+use charge_system_common::bms;
+use chrono::Utc;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::charge_system::{
-    self, AppliedChargingPlan, ChargeStatus, ChargeSystemConnectionState,
+    AppliedChargingPlan, Bms, ChargeStatus, ChargeSystemConnectionState,
     Notification as ChargeSystemNotification,
 };
 use crate::{PlaybackState, PlayerData, PlayerNotification};
@@ -48,10 +50,7 @@ const CHARGING_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 #[derive(Debug)]
 pub enum DisplayCmd {
     Player(PlayerNotification),
-    ChargeSystem {
-        notification: ChargeSystemNotification,
-        instant: Instant,
-    },
+    ChargeSystem(ChargeSystemNotification),
 }
 
 /// Display state as reported by the MPRIS aggregator or Charge System listener.
@@ -80,8 +79,8 @@ struct Player {
 #[derive(Debug)]
 struct ChargeSystem {
     charge_status: ChargeStatus,
-    target_soc: Option<u8>,
-    update_base_instant: Instant,
+    bms: Bms,
+    plan: AppliedChargingPlan,
     connection_alert: Option<ChargeSystemConnectionState>,
 }
 
@@ -95,10 +94,9 @@ impl ChargeSystem {
     fn is_significant(&self) -> bool {
         self.must_alert() || self.charge_status.is_significant()
     }
-    fn clear_connection_alert(&mut self, notification: &ChargeSystemNotification) -> bool {
+    fn clear_connection_alert(&mut self) -> bool {
         if let Some(alert) = self.connection_alert.take() {
             info!(
-                notification = %notification.name(),
                 charge_state = ?self.charge_status,
                 ?alert,
                 "cleared charge system connection alert",
@@ -116,12 +114,8 @@ impl ChargeSystem {
         }
 
         match self.charge_status {
-            ChargeStatus::Charging(progress) if progress.remaining_time > 0 => {
-                Some(CHARGING_REFRESH_INTERVAL)
-            }
-            ChargeStatus::Charging(_) | ChargeStatus::SuspendedEvse(_) | ChargeStatus::Error => {
-                None
-            }
+            ChargeStatus::Charging => Some(CHARGING_REFRESH_INTERVAL),
+            ChargeStatus::SuspendedEvse | ChargeStatus::Error => None,
             _ => Some(IDLE_TICK_TIMEOUT),
         }
     }
@@ -166,8 +160,8 @@ impl Display {
             },
             charge_system: ChargeSystem {
                 charge_status: ChargeStatus::Available,
-                target_soc: None,
-                update_base_instant: Instant::now(),
+                bms: Bms::builder(bms::DEFAULT_CAPACITY).build(),
+                plan: AppliedChargingPlan::default(),
                 connection_alert: None,
             },
         })
@@ -244,11 +238,8 @@ impl Display {
                 self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargeSystem {
-                notification,
-                instant,
-            } => {
-                self.update_charge_system(notification, instant).await;
+            DisplayCmd::ChargeSystem(notification) => {
+                self.update_charge_system(notification).await;
             }
         }
     }
@@ -408,21 +399,14 @@ impl Display {
                 self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargeSystem {
-                notification: state,
-                instant,
-            } => {
-                self.update_charge_system(state, instant).await;
+            DisplayCmd::ChargeSystem(notification) => {
+                self.update_charge_system(notification).await;
             }
         }
     }
 
     /// Update internal state data
-    async fn update_charge_system(
-        &mut self,
-        notification: ChargeSystemNotification,
-        instant: Instant,
-    ) {
+    async fn update_charge_system(&mut self, notification: ChargeSystemNotification) {
         if notification.is_critical() {
             warn!(?notification, "charge system");
         } else {
@@ -430,52 +414,43 @@ impl Display {
         }
 
         use ChargeSystemNotification::*;
-        match &notification {
-            Status(charge_status) => {
+        match notification {
+            Status { status, .. } => {
                 self.state = DisplayState::ChargeSystem;
-                self.charge_system.clear_connection_alert(&notification);
+                self.charge_system.clear_connection_alert();
 
-                if let ChargeStatus::Charging(progress) = charge_status {
-                    if let ChargeStatus::Charging(ref cur_progress)
-                    | ChargeStatus::SuspendedEvse(ref cur_progress) =
-                        self.charge_system.charge_status
-                    {
-                        self.update_line1 |= !progress.soc.pratically_equals(cur_progress.soc);
-                        self.update_line2 = progress.remaining_time != cur_progress.remaining_time;
-                    } else {
-                        self.update_line1 = true;
-                        self.update_line2 = true;
-                    }
-                } else {
-                    self.update_line1 = true;
-                    self.update_line2 = true;
-                }
+                self.update_line1 = true;
+                self.update_line2 = true;
 
-                self.charge_system.charge_status = *charge_status;
-                self.charge_system.update_base_instant = instant;
+                self.charge_system.charge_status = status;
                 self.set_tick_timeout(self.charge_system.get_tick_timeout());
             }
-            BmsUpdate(bms) => {
-                self.charge_system.clear_connection_alert(&notification);
+            BmsUpdate { bms, .. } => {
+                self.charge_system.clear_connection_alert();
 
-                let bms_cur_soc = bms.current_soc();
-                if let ChargeStatus::Charging(ref mut cur_progress)
-                | ChargeStatus::SuspendedEvse(ref mut cur_progress) =
+                if let ChargeStatus::Charging | ChargeStatus::SuspendedEvse =
                     self.charge_system.charge_status
-                    && !cur_progress.soc.pratically_equals(bms_cur_soc)
+                    && !self
+                        .charge_system
+                        .bms
+                        .current_soc()
+                        .pratically_equals(bms.current_soc())
                 {
-                    cur_progress.soc = bms_cur_soc;
                     self.update_line1 = self.charge_system.charge_status.shows_soc();
                 }
 
-                let target_soc = bms.target_soc.map(|bts| (bts * 100.0).round() as u8);
-                if self.charge_system.target_soc != target_soc {
-                    self.charge_system.target_soc = target_soc;
+                if self.charge_system.bms.target_soc() != bms.target_soc() {
                     self.update_line1 = self.charge_system.charge_status.shows_soc();
                 }
+
+                self.charge_system.bms = bms;
+                self.update_line2 = true;
             }
-            Connection(ChargeSystemConnectionState::Heartbeat) => {
-                if self.charge_system.clear_connection_alert(&notification) {
+            Connection {
+                state: ChargeSystemConnectionState::Heartbeat,
+                ..
+            } => {
+                if self.charge_system.clear_connection_alert() {
                     // recovered connection => get back to charge state
                     self.set_tick_timeout(self.charge_system.get_tick_timeout());
                 } else {
@@ -483,27 +458,15 @@ impl Display {
                     return;
                 }
             }
-            Connection(alert) => {
+            Connection { state, .. } => {
                 self.state = DisplayState::ChargeSystem;
-                self.charge_system.connection_alert = Some(*alert);
+                self.charge_system.connection_alert = Some(state);
                 self.disable_tick();
             }
-            ChargingPlan(AppliedChargingPlan { plan, .. }) => {
-                self.charge_system.clear_connection_alert(&notification);
-
-                if let charge_system::ChargingPlan::Deadline { target_soc, .. }
-                | charge_system::ChargingPlan::Asap { target_soc, .. } = plan
-                {
-                    let target_soc = (target_soc * 100.0).round() as u8;
-                    if self
-                        .charge_system
-                        .target_soc
-                        .is_none_or(|cur_target_soc| cur_target_soc != target_soc)
-                    {
-                        self.charge_system.target_soc = Some(target_soc);
-                        self.update_line1 = self.charge_system.charge_status.shows_soc();
-                    }
-                }
+            ChargingPlan(plan) => {
+                self.charge_system.clear_connection_alert();
+                self.charge_system.plan = plan;
+                self.update_line2 = true;
             }
             MeterValues(_) => {
                 return;
@@ -531,16 +494,11 @@ impl Display {
 
         use ChargeStatus::*;
         match &self.charge_system.charge_status {
-            Charging(progress) | SuspendedEvse(progress) => {
+            Charging | SuspendedEvse => {
                 if self.update_line1 {
                     self.update_line1 = false;
 
-                    let target_soc_str = if let Some(target_soc) = self.charge_system.target_soc {
-                        format!("{target_soc:>2}")
-                    } else {
-                        "??".to_string()
-                    };
-
+                    let soc_str = self.charge_system.bms.current_soc().to_string();
                     self.oled
                         .write_line(
                             LineNb::One,
@@ -550,29 +508,42 @@ impl Display {
                                 "||"
                             }
                             .chars()
-                            .chain(format!("{:>6}", progress.soc.to_string()).chars())
+                            .chain(std::iter::repeat_n(
+                                ' ',
+                                6usize.saturating_sub(soc_str.len()),
+                            ))
+                            .chain(soc_str.chars())
                             .chain(" / ".chars())
-                            .chain(target_soc_str.chars()),
+                            .chain(self.charge_system.bms.target_soc_str().chars()),
                         )
                         .await;
                 }
 
                 if self.update_line2 {
-                    let seconds_left = if self.charge_system.charge_status.is_charging() {
-                        progress.remaining_time.saturating_sub(
-                            self.charge_system.update_base_instant.elapsed().as_secs() as u32,
-                        )
+                    if let Some(rem) = self
+                        .charge_system
+                        .plan
+                        .remaining(Utc::now(), &self.charge_system.bms)
+                    {
+                        let seconds = rem.duration.num_seconds();
+                        let minutes = seconds / 60;
+                        let secs = seconds % 60;
+                        self.oled
+                            .write_line(
+                                LineNb::Two,
+                                format!("{minutes:02}:{secs:02} prévues").chars(),
+                            )
+                            .await;
+
+                        if seconds == 0 {
+                            self.disable_tick();
+                        }
                     } else {
-                        progress.remaining_time
+                        self.disable_tick();
+                        self.oled
+                            .write_line(LineNb::Two, "durée inconnue".to_string().chars())
+                            .await;
                     };
-                    let minutes = seconds_left / 60;
-                    let secs = seconds_left % 60;
-                    self.oled
-                        .write_line(
-                            LineNb::Two,
-                            format!("{minutes:02}:{secs:02} prévues").chars(),
-                        )
-                        .await;
                 }
             }
             other => {
@@ -617,13 +588,10 @@ impl Display {
                 self.player.data.base_position_s = position_s;
                 self.player.data.base_position_instant = instant;
             }
-            DisplayCmd::ChargeSystem {
-                notification: state,
-                instant,
-            } => {
+            DisplayCmd::ChargeSystem(notification) => {
                 self.oled.clear_on().await;
                 self.state = DisplayState::ChargeSystem;
-                self.update_charge_system(state, instant).await;
+                self.update_charge_system(notification).await;
             }
         }
     }
@@ -771,11 +739,16 @@ impl ChargeSystemNotificationExt for ChargeSystemNotification {
     fn is_critical(&self) -> bool {
         matches!(
             self,
-            ChargeSystemNotification::Status(ChargeStatus::Error)
-                | ChargeSystemNotification::Connection(ChargeSystemConnectionState::Error)
-                | ChargeSystemNotification::Connection(
-                    ChargeSystemConnectionState::MissedHeartbeat
-                )
+            ChargeSystemNotification::Status {
+                status: ChargeStatus::Error,
+                ..
+            } | ChargeSystemNotification::Connection {
+                state: ChargeSystemConnectionState::Error,
+                ..
+            } | ChargeSystemNotification::Connection {
+                state: ChargeSystemConnectionState::MissedHeartbeat,
+                ..
+            }
         )
     }
 }
@@ -793,21 +766,25 @@ impl ChargeStatusExt for ChargeStatus {
         match self {
             Available => "disponible",
             Preparing => "en préparation",
-            Charging(_) => "en charge",
-            SuspendedEvse(_) => "pause programmée",
+            Charging => "en charge",
+            SuspendedEvse => "pause programmée",
+            SoCTargetReached => "SoC atteint",
             SuspendedEv => "arrêt véhicule",
             StoppedByUser => "arrêt externe",
             Finishing => "VE déconnecté",
-            UnknownSession => "session inconnue",
+            Unknown => "session inconnue",
             Error => "erreur en charge",
         }
     }
 
     fn is_charging(&self) -> bool {
-        matches!(self, Self::Charging(_))
+        *self == Self::Charging
     }
     fn shows_soc(&self) -> bool {
-        matches!(self, Self::Charging(_) | Self::SuspendedEvse(_))
+        matches!(
+            self,
+            Self::Charging | Self::SuspendedEvse | Self::SoCTargetReached
+        )
     }
     fn is_error(&self) -> bool {
         matches!(self, Self::Error)
@@ -815,12 +792,12 @@ impl ChargeStatusExt for ChargeStatus {
     fn is_significant(&self) -> bool {
         matches!(
             self,
-            ChargeStatus::Charging(_)
-                | ChargeStatus::SuspendedEvse(_)
+            ChargeStatus::Charging
+                | ChargeStatus::SuspendedEvse
                 | ChargeStatus::SuspendedEv
                 | ChargeStatus::StoppedByUser
                 | ChargeStatus::Finishing
-                | ChargeStatus::UnknownSession
+                | ChargeStatus::Unknown
                 | ChargeStatus::Error
         )
     }

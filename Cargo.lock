@@ -130,7 +130,7 @@ dependencies = [
 [[package]]
 name = "charge-system-common-model"
 version = "0.1.0"
-source = "git+https://github.com/fengalin/ocpp-server?branch=webserver-wasm#e781983959077ae065b413a111c0cda2c40fb98d"
+source = "git+https://github.com/fengalin/ocpp-server?branch=webserver-wasm#4bd6084809d48cb71c7d64c84414aea579a4ea9b"
 dependencies = [
  "chrono",
  "serde",
