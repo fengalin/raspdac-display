@@ -793,7 +793,6 @@ impl ChargeStatusExt for ChargeStatus {
         matches!(
             self,
             ChargeStatus::Charging
-                | ChargeStatus::SuspendedEvse
                 | ChargeStatus::SuspendedEv
                 | ChargeStatus::StoppedByUser
                 | ChargeStatus::Finishing
